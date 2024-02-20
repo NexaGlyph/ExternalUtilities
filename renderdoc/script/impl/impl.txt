@@ -1,0 +1,8 @@
+-F 
+../../
+-P
+_load_instance_proc_addr
+-Pf
+../../append.odin
+-If
+renderdoc.odin
