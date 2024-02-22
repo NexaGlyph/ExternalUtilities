@@ -41,15 +41,8 @@ log_fatalf :: proc(logger: log.Logger, fmt_str: string, args: ..any, location :=
     logf(logger, .Fatal, fmt_str, args, location);
 }
 
-GREEN :: "\x1b32m";
-
 log_customf :: proc(color: string, fmt_str: string, args: ..any, logger := context.logger, location := #caller_location) {
-    builder := strings.Builder{};
-    strings.builder_init(&builder);
-    format := fmt.sbprintf(&builder, "%s [CUSTOM]: %s", color, fmt_str);
-    log.errorf(format);
-    fmt.print(format, args);
-    strings.builder_destroy(&builder);
+    assert(false, "TO DO!");
 }
 
 clearf :: proc(logger: ^Logger) {

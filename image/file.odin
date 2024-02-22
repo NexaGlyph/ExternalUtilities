@@ -1,14 +1,24 @@
 package image
 
+import "core:fmt"
+import "core:io"
+import "core:bufio"
 import "core:os"
 import "core:log"
 
 FileFormat :: enum u8 {
     PPM,
+    JPEG,
+    PNG,
 }
 
 FileWriteDescriptor :: struct {
     write_format: FileFormat,
+    file_path: string,
+}
+
+FileReadDescriptor :: struct {
+    read_format: FileFormat,
     file_path: string,
 }
 
@@ -46,13 +56,39 @@ btranspose_16u :: #force_inline proc(value: u16) -> []byte {
     };
 }
 
-@(private="file")
+@(private="package")
 write_file :: proc(handle: os.Handle, data: []byte, caller_location := #caller_location) {
-    _, err := os.write(handle, data);
+    size, err := os.write(handle, data);
     if err != os.ERROR_NONE {
         log.errorf("Failed to write to a file %v", err);
         assert(false);
     }
+    assert(size == len(data), "Something went wrong with the writes");
+}
+
+@(private="package")
+@(require_results)
+fread :: proc(handle: os.Handle, length: int, caller_location := #caller_location) -> []byte {
+    buffer := make([]byte, length);
+    _, err := os.read(handle, buffer);
+    if err != os.ERROR_NONE {
+        log.errorf("Failed to read file %v", err);
+        delete(buffer);
+        assert(false);
+    }
+    return buffer;
+}
+
+@(private="package")
+@(require_results)
+fread_all :: proc(handle: os.Handle, caller_location := #caller_location) -> []byte {
+    buffer, err := os.read_entire_file_from_handle(handle);
+    if err != true {
+        log.errorf("Failed to read file %v", err);
+        delete(buffer);
+        assert(false);
+    }
+    return buffer;
 }
 
 /* IMAGE */
@@ -68,18 +104,32 @@ write_to_file :: proc(using img: ^Image) {
 
 /* IMAGE2 */
 @(private="file")
-read_from_file_bgr :: proc(using img: ^ImageBGR8) {
-    assert(false, "TO DO!");
+read_from_file_bgr :: proc(using img: ^Image2(BGR($PixelData)), frd: FileReadDescriptor) {
+    switch frd.read_format {
+        case .PPM:
+            ppm_read2_bgr(to_raw(img), frd.file_path);
+            break;
+        case .JPEG:
+            assert(false, "TO DO!");
+        case .PNG:
+            assert(false, "TO DO!");
+        case:
+            assert(false, "Cannot happen...");
+    }
 }
 
-// @(private="file")
-// read_from_file_urgba :: proc(using img: ^ImageRGBA8) {
-//     assert(false, "TO DO!");
-// }
-
 @(private="file")
-read_from_file_srgba :: proc(using img: ^ImageRGBA8) {
-    assert(false, "TO DO!");
+read_from_file_rgba :: proc(using img: ^Image2(RGBA($PixelData)), frd: FileReadDescriptor) {
+    switch frd.read_format {
+        case .PPM:
+            assert(false, "TO DO!");
+        case .JPEG:
+            assert(false, "TO DO!");
+        case .PNG:
+            assert(false, "TO DO!");
+        case:
+            assert(false, "Cannot happen...");
+    }
 }
 
 @(private="file")
@@ -88,6 +138,10 @@ write_to_file2_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), fwd: FileWriteD
         case .PPM:
             ppm_write2_bgr(img, fwd.file_path);
             break;
+        case .JPEG:
+            assert(false, "TO DO!");
+        case .PNG:
+            assert(false, "TO DO!");
         case:
             assert(false, "Cannot happen...");
     }
@@ -99,34 +153,14 @@ write_to_file2_rgba :: proc(using img: ^Image2(RGBA($PixelDataT)), fwd: FileWrit
         case .PPM:
             ppm_write2_rgba(img, fwd.file_path);
             break;
+        case .JPEG:
+            assert(false, "TO DO!");
+        case .PNG:
+            assert(false, "TO DO!");
         case:
             assert(false, "Cannot happen...");
     }
 }
 
-ppm_write2_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), file_path: string) {
-    handle := ppm_prepare(file_path, size);
-    defer os.close(handle);
-    for pxl in data do write_file(handle, { pxl.b.data, ' ', pxl.bgr.g, ' ', pxl.bgr.b, ' ', '\n' });
-}
-
-ppm_write2_rgba :: proc(using img: ^Image2(RGBA($PixelType)), file_path: string) {
-    handle := ppm_prepare(file_path, size);
-    defer os.close(handle);
-    for pxl in data do write_file(handle, { pxl.rgba.r, ' ', pxl.rgba.g, ' ', pxl.rgba.b, ' ', pxl.rgba.a, '\n' });
-}
-
-ppm_prepare :: proc(file_path: string, size: ImageSize) -> os.Handle {
-    handle, ok := os.open(file_path, os.O_WRONLY | os.O_CREATE);
-    assert(ok == os.ERROR_NONE, "Failed to open file!");
-    
-    write_file(handle, { 'P', '3', '\n' });
-    write_file(handle, { '5', '0', ' ', '5', '0' });
-    write_file(handle, { '\n' });
-    write_file(handle, { '2', '5', '5', '\n' });
-
-    return handle;
-}
-
-read  :: proc { read_from_file, read_from_file_bgr }
+read  :: proc { read_from_file, read_from_file_bgr, read_from_file_rgba }
 write :: proc { write_to_file,  write_to_file2_bgr, write_to_file2_rgba }

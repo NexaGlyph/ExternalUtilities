@@ -2,7 +2,7 @@ package image
 
 import "core:math/rand"
 
-IMAGE_SIZE :: #force_inline proc(#any_int x, y: u16) -> ImageSize {
+IMAGE_SIZE :: #force_inline proc(#any_int x, y: u32) -> ImageSize {
     return ImageSize{ x, y }; 
 }
 
