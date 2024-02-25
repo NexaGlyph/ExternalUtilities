@@ -1,5 +1,6 @@
 package image
 
+import "core:strings"
 import "core:fmt"
 import "core:io"
 import "core:bufio"
@@ -8,7 +9,7 @@ import "core:log"
 
 FileFormat :: enum u8 {
     PPM,
-    JPEG,
+    BMP, 
     PNG,
 }
 
@@ -40,7 +41,6 @@ btranspose_16i :: #force_inline proc(value: i16) -> []byte {
     };
 }
 /* unsigned */
-/* binary */
 btranspose_32u :: #force_inline proc(value: u32) -> []byte {
     return {
         cast(u8)(value >> 24),
@@ -56,10 +56,82 @@ btranspose_16u :: #force_inline proc(value: u16) -> []byte {
     };
 }
 
+/* little endian */
+btranspose_32i_le :: #force_inline proc(value: i32) -> []byte {
+    return {
+        cast(u8)(value),
+        cast(u8)(value >> 8),
+        cast(u8)(value >> 16),
+        cast(u8)(value >> 24),
+    };
+}
+
+btranspose_16i_le :: #force_inline proc(value: i16) -> []byte {
+    return {
+        cast(u8)(value),
+        cast(u8)(value >> 8),
+    };
+}
+
+btranspose_32u_le :: #force_inline proc(value: u32) -> []byte {
+    return {
+        cast(u8)(value),
+        cast(u8)(value >> 8),
+        cast(u8)(value >> 16),
+        cast(u8)(value >> 24),
+    };
+}
+
+btranspose_16u_le :: #force_inline proc(value: u16) -> []byte {
+    return {
+        cast(u8)(value),
+        cast(u8)(value >> 8),
+    };
+}
+
+/* signed */
+i32_transpose :: #force_inline proc(value: []u8) -> i32 {
+    return i32(value[0]) | i32(value[1]) << 8 | i32(value[2]) << 16 | i32(value[3]) << 24;
+}
+i16_transpose :: #force_inline proc(value: []u8) -> i16 {
+    return i16(value[0]) | i16(value[1]) << 8;
+}
+/* unsigned */
+u32_transpose :: #force_inline proc(value: []u8) -> u32 {
+    return u32(value[0]) | u32(value[1]) << 8 | u32(value[2]) << 16 | u32(value[3]) << 24;
+}
+u16_transpose :: #force_inline proc(value: []u8) -> u16 {
+    return u16(value[0]) | u16(value[1]) << 8;
+}
+
+/* little endian */
+i32_le_transpose :: #force_inline proc(value: []u8) -> i32 {
+    return i32(value[3]) | i32(value[2] << 8) | i32(value[1] << 16) | i32(value[0]) << 24;
+}
+i16_le_transpose :: #force_inline proc(value: []u8) -> i16 {
+    return i16(value[1]) | i16(value[0] << 8);
+}
+u32_le_transpose :: #force_inline proc(value: []u8) -> u32 {
+    return u32(value[3]) | u32(value[2] << 8) | u32(value[1] << 16) | u32(value[0]) << 24;
+}
+u16_le_transpose :: #force_inline proc(value: []u8) -> u16 {
+    return u16(value[1]) | u16(value[0] << 8);
+}
+
 @(private="package")
 write_file :: proc(handle: os.Handle, data: []byte, caller_location := #caller_location) {
     size, err := os.write(handle, data);
     if err != os.ERROR_NONE {
+        log.errorf("Failed to write to a file %v", err);
+        assert(false);
+    }
+    assert(size == len(data), "Something went wrong with the writes");
+}
+
+@(private="package")
+write_file_writer :: proc(writer: io.Writer, data: []byte, caller_location := #caller_location) {
+    size, err := io.write(writer, data);
+    if err != .None {
         log.errorf("Failed to write to a file %v", err);
         assert(false);
     }
@@ -109,7 +181,7 @@ read_from_file_bgr :: proc(using img: ^Image2(BGR($PixelData)), frd: FileReadDes
         case .PPM:
             ppm_read2_bgr(to_raw(img), frd.file_path);
             break;
-        case .JPEG:
+        case .BMP:
             assert(false, "TO DO!");
         case .PNG:
             assert(false, "TO DO!");
@@ -123,7 +195,7 @@ read_from_file_rgba :: proc(using img: ^Image2(RGBA($PixelData)), frd: FileReadD
     switch frd.read_format {
         case .PPM:
             assert(false, "TO DO!");
-        case .JPEG:
+        case .BMP:
             assert(false, "TO DO!");
         case .PNG:
             assert(false, "TO DO!");
@@ -133,27 +205,48 @@ read_from_file_rgba :: proc(using img: ^Image2(RGBA($PixelData)), frd: FileReadD
 }
 
 @(private="file")
-write_to_file2_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), fwd: FileWriteDescriptor) {
+has_file_type :: proc(file_path: string, type: string) -> bool {
+    length := len(file_path);
+    return file_path[length - 1] == type[2] && file_path[length - 2] == type[1] && file_path[length - 3] == type[0];
+}
+
+@(private="file")
+write_to_file_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), fwd: FileWriteDescriptor) {
     switch fwd.write_format {
         case .PPM:
-            ppm_write2_bgr(img, fwd.file_path);
+            if !has_file_type(fwd.file_path, "ppm") {
+                new_file_path := strings.concatenate({ fwd.file_path, ".ppm" });
+                ppm_write2_bgr(img, new_file_path);
+                delete(new_file_path);
+            }
+            else do ppm_write2_bgr(img, fwd.file_path);
             break;
-        case .JPEG:
-            assert(false, "TO DO!");
+        case .BMP:
+            if !has_file_type(fwd.file_path, "bmp") {
+                new_file_path := strings.concatenate({ fwd.file_path, ".png" });
+                bmp_write(img, new_file_path);
+                delete(new_file_path);
+            }
+            else do bmp_write(img, fwd.file_path);
         case .PNG:
-            assert(false, "TO DO!");
+            if !has_file_type(fwd.file_path, "png") {
+                new_file_path := strings.concatenate({ fwd.file_path, ".png" });
+                png_write(img, new_file_path);
+                delete(new_file_path);
+            }
+            else do png_write(img, fwd.file_path);
         case:
             assert(false, "Cannot happen...");
     }
 }
 
 @(private="file")
-write_to_file2_rgba :: proc(using img: ^Image2(RGBA($PixelDataT)), fwd: FileWriteDescriptor) {
+write_to_file_rgba :: proc(using img: ^Image2(RGBA($PixelDataT)), fwd: FileWriteDescriptor) {
     switch fwd.write_format {
         case .PPM:
             ppm_write2_rgba(img, fwd.file_path);
             break;
-        case .JPEG:
+        case .BMP:
             assert(false, "TO DO!");
         case .PNG:
             assert(false, "TO DO!");
@@ -163,4 +256,4 @@ write_to_file2_rgba :: proc(using img: ^Image2(RGBA($PixelDataT)), fwd: FileWrit
 }
 
 read  :: proc { read_from_file, read_from_file_bgr, read_from_file_rgba }
-write :: proc { write_to_file,  write_to_file2_bgr, write_to_file2_rgba }
+write :: proc { write_to_file,  write_to_file_bgr, write_to_file_rgba }

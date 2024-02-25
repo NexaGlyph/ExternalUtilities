@@ -1,13 +1,27 @@
 package optional
 
 Optional :: struct($T: typeid) {
+    has_val: bool,
     _val: T,
 }
 
-init :: proc(val: $T) -> Optional(T) {
+init_value :: proc(val: $T) -> Optional(T) {
     return {
+        has_val = true,
         _val = val,
     };
+}
+
+init_empty :: proc($T: typeid) -> Optional(T) {
+    return Optional(T) {
+        has_val = false,
+    };
+}
+
+init :: proc { init_empty, init_value }
+
+some :: #force_inline proc(this: ^Optional($T)) -> bool {
+    return this^.has_val;
 }
 
 NO_PTR :: true;

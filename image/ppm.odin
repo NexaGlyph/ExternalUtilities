@@ -9,7 +9,10 @@ ppm_read2_bgr :: proc(using img: RawImage, file_path: string) {
     img := img;
 
     handle, ok := os.open(file_path, os.O_RDONLY);
-    assert(ok == os.ERROR_NONE, "Failed to open [read] file!");
+    if ok != os.ERROR_NONE {
+        log.errorf("%v", ok);
+        assert(false, "Failed to open [read] file!");
+    }
 
     file_buffer := fread_all(handle);
     defer delete(file_buffer);
@@ -54,23 +57,28 @@ ppm_read2_bgr :: proc(using img: RawImage, file_path: string) {
     assert(false, "TO DO: read buffer!");
 }
 
-@(private="file")
-parse_integer :: proc(s: []byte) -> u32 {
-    result := u32(0);
-    for c in s {
-        result *= 10;
-        result += u32(c - '0');
-    }
-    return result;
+ppm_write2_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), file_path: string) {
+    handle := ppm_header_prepare(file_path, size);
+    defer os.close(handle);
+
+    writer_buffer: io.Writer = { os.stream_from_handle(handle) };
+    for pxl in data do ppm_write_pixel_bgr(&writer_buffer, pxl);
+}
+
+ppm_write2_rgba :: proc(using img: ^Image2(RGBA($PixelType)), file_path: string) {
+    handle := ppm_header_prepare(file_path, size);
+    defer os.close(handle);
+
+    writer_buffer: io.Writer = { os.stream_from_handle(handle) };
+    for pxl in data do ppm_write_pixel_rgba(&writer_buffer, pxl);
 }
 
 ppm_header_prepare :: proc(file_path: string, size: ImageSize) -> os.Handle {
-    handle: os.Handle;
-    ok: os.Errno;
-    if os.exists(file_path) do handle, ok = os.open(file_path, os.O_RDONLY | os.O_TRUNC);
-    else do handle, ok = os.open(file_path, os.O_WRONLY | os.O_CREATE);
-
-    assert(ok == os.ERROR_NONE, "Failed to open file!");
+    handle, ok := os.open(file_path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC);
+    if ok != os.ERROR_NONE {
+        log.errorf("%v", ok);
+        assert(false, "Failed to open file!");
+    }
     
     write_file(handle, { 'P', '3', '\n' });
     write_file(handle, int_to_string(size.x));
@@ -82,22 +90,12 @@ ppm_header_prepare :: proc(file_path: string, size: ImageSize) -> os.Handle {
     return handle;
 }
 
-DIGITS := "0123456789";
-int_to_string :: #force_inline proc(#any_int val: u64) -> []byte {
-    buf := make([]byte, 32);
-    a: [129]byte;
-	i := len(a);
-	b :: u64(10);
-    val := val;
-	for val >= b {
-		i-=1; a[i] = DIGITS[val % b];
-		val /= b;
-	}
-	i-=1; a[i] = DIGITS[val % b];
+ppm_write_pixel_bgr :: #force_inline proc(writer_buffer: ^io.Writer, val: BGR($PixelDataT)) -> int {
+    return ppm_write_pixel_data(writer_buffer, ppm_bgr_pixel_to_bytes(val));
+}
 
-	out := a[i:]
-	copy(buf, out);
-    return buf[0:len(out)];
+ppm_write_pixel_rgba :: #force_inline proc(writer_buffer: ^io.Writer, val: RGBA($PixelDataT)) -> int {
+    return ppm_write_pixel_data(writer_buffer, ppm_rgba_pixel_to_bytes(val));
 }
 
 ppm_write_pixel_data :: #force_inline proc(writer_buffer: ^io.Writer, val: []byte) -> int {
@@ -108,35 +106,6 @@ ppm_write_pixel_data :: #force_inline proc(writer_buffer: ^io.Writer, val: []byt
         assert(false, "Failed to write to writer_buffer!");
     }
     return size;
-}
-
-int_to_bytes :: #force_inline proc(#any_int val: u32) -> []byte {
-    if val == 0 do return { '0' };
-    bytes: [11]byte = {};
-    val := val;
-    i := 0;
-    for val >= 1 {
-        bytes[i] = byte(val % 10 + '0');
-        val /= 10;
-        i += 1;
-    }
-
-    swap :: #force_inline proc(x, y: byte) -> (byte, byte) {
-        return y, x;
-    }
-    for left, right in 0..<i / 2 {
-        bytes[left], bytes[i - 1 - right] = swap(bytes[left], bytes[i - 1 - right]);
-    }
-   
-    return bytes[0:i];
-}
-
-pixel_data_to_bytes :: #force_inline proc(val: $PixelDataT, pixel_bytes: []byte) -> int {
-    bytes := int_to_bytes(val);
-    nbytes := len(bytes);
-    copy(pixel_bytes[:nbytes], bytes);
-    pixel_bytes[nbytes] = byte(' ');
-    return nbytes + 1;
 }
 
 ppm_bgr_pixel_to_bytes :: #force_inline proc(val: BGR($PixelDataT)) -> []byte {
@@ -165,27 +134,59 @@ ppm_rgba_pixel_to_bytes :: #force_inline proc(val: RGBA($PixelDataT)) -> []byte 
     return all_bytes[:i];
 }
 
-ppm_write_pixel_bgr :: #force_inline proc(writer_buffer: ^io.Writer, val: BGR($PixelDataT)) -> int {
-    return ppm_write_pixel_data(writer_buffer, ppm_bgr_pixel_to_bytes(val));
+pixel_data_to_bytes :: #force_inline proc(val: $PixelDataT, pixel_bytes: []byte) -> int {
+    bytes := int_to_bytes(val);
+    nbytes := len(bytes);
+    copy(pixel_bytes[:nbytes], bytes);
+    pixel_bytes[nbytes] = byte(' ');
+    return nbytes + 1;
 }
 
-ppm_write_pixel_rgba :: #force_inline proc(writer_buffer: ^io.Writer, val: RGBA($PixelDataT)) -> int {
-    return ppm_write_pixel_data(writer_buffer, ppm_rgba_pixel_to_bytes(val));
+int_to_bytes :: #force_inline proc(#any_int val: u32) -> []byte {
+    if val == 0 do return { '0' };
+    bytes: [11]byte = {};
+    val := val;
+    i := 0;
+    for val >= 1 {
+        bytes[i] = byte(val % 10 + '0');
+        val /= 10;
+        i += 1;
+    }
+
+    swap :: #force_inline proc(x, y: byte) -> (byte, byte) {
+        return y, x;
+    }
+    for left, right in 0..<i / 2 {
+        bytes[left], bytes[i - 1 - right] = swap(bytes[left], bytes[i - 1 - right]);
+    }
+   
+    return bytes[0:i];
 }
 
-ppm_write2_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), file_path: string) {
-    handle := ppm_header_prepare(file_path, size);
-    defer os.close(handle);
+DIGITS := "0123456789";
+int_to_string :: #force_inline proc(#any_int val: u64) -> []byte {
+    buf := make([]byte, 32);
+    a: [129]byte;
+	i := len(a);
+	b :: u64(10);
+    val := val;
+	for val >= b {
+		i-=1; a[i] = DIGITS[val % b];
+		val /= b;
+	}
+	i-=1; a[i] = DIGITS[val % b];
 
-    writer_buffer: io.Writer = { os.stream_from_handle(handle) };
-
-    for pxl in data do ppm_write_pixel_bgr(&writer_buffer, pxl);
+	out := a[i:]
+	copy(buf, out);
+    return buf[0:len(out)];
 }
 
-ppm_write2_rgba :: proc(using img: ^Image2(RGBA($PixelType)), file_path: string) {
-    handle := ppm_header_prepare(file_path, size);
-    defer os.close(handle);
-
-    writer_buffer: io.Writer = { os.stream_from_handle(handle) };
-    for pxl in data do ppm_write_pixel_rgba(&writer_buffer, pxl);
+@(private="file")
+parse_integer :: proc(s: []byte) -> u32 {
+    result := u32(0);
+    for c in s {
+        result *= 10;
+        result += u32(c - '0');
+    }
+    return result;
 }
