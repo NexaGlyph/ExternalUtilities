@@ -1,5 +1,6 @@
 package image
 
+import "core:image/png"
 import "core:mem"
 import "core:os"
 import "core:io"
@@ -139,6 +140,14 @@ IHDR_Data :: struct {
     m_filter: u8,
     m_interlace: u8,
 }
+
+Interlace :: enum u8 {
+    NoInterlace = 0,
+    Adam7 = 1,
+}
+NO_INTERLACE :: Interlace.NoInterlace;
+ADAM7 :: Interlace.Adam7;
+
 CRC_IHDR_Data :: struct {
     width: []u8,
     height: []u8,
@@ -501,7 +510,6 @@ png_write_data_chunk_data    :: proc(writer: io.Writer, data: ^IDAT_Data) {
         // log.infof("%v", btranspose_16u(block.length));
         _write_file_safe(writer, { block.zlib_header.CMF, block.zlib_header.FLG });
         // log.infof("%v .... %v", block.zlib_header.CMF, block.zlib_header.FLG);
-        _write_file_safe(writer, { 48, 48, 48 });
         _write_file_safe(writer, block.compressed_data);
         log.infof("%v", block.compressed_data);
         log.infof("%v", len(block.compressed_data));

@@ -68,30 +68,38 @@ init_dib :: proc(size: ImageSize, bit_depth: u16) -> bmpfile_dib_info {
     };
 }
 
-bmp_write_bgr8  :: proc(using img: ^ImageBGR8, file_path: string) {
+/* BMP WRITE */
+@(private="file")
+_bmp_write_begin :: proc(file_path: string) -> os.Handle {
     handle, ok := os.open(file_path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC);
-    defer os.close(handle);
 
     if ok != os.ERROR_NONE {
         log.errorf("%v", ok);
         assert(false, "Failed to open file [png] for writing");
     }
-    
-    writer := io.Writer{ os.stream_from_handle(handle) };
+
+    return handle;
+}
+
+bmp_write_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), file_path: string) {
+    handle := _bmp_write_begin(file_path);
+    writer := io.Writer { os.stream_from_handle(handle) };
+    defer os.close(handle);
+    defer io.destroy(writer);
    
     _bmp_write_magic(writer);
     _bmp_write_header(writer, init_header(size));
-    _bmp_write_dib(writer, init_dib(size, 24));
-    _bmp_write_data(writer, data, size);
+    _bmp_write_dib(writer, init_dib(size, 8 * size_of(PixelDataT)));
+    bmp_array := _bmp_data_convert(data, size);
+    _bmp_write_data(writer, bmp_array);
 }
 
-bmp_write_bgr16 :: proc(using img: ^ImageBGR16, file_path: string) {}
-bmp_write_bgr32 :: proc(using img: ^ImageBGR32, file_path: string) {}
-
+@(private="file")
 _bmp_write_magic :: #force_inline proc(writer: io.Writer) {
     write_file_writer(writer, { 'B', 'M' });
 }
 
+@(private="file")
 _bmp_write_header :: #force_inline proc(writer: io.Writer, header: bmpfile_header) {
     write_file_writer(writer, btranspose_32u_le(header.file_size));
     write_file_writer(writer, btranspose_16u_le(header.creator1));
@@ -99,6 +107,7 @@ _bmp_write_header :: #force_inline proc(writer: io.Writer, header: bmpfile_heade
     write_file_writer(writer, btranspose_32u_le(header.bmp_offset));
 }
 
+@(private="file")
 _bmp_write_dib :: #force_inline proc(writer: io.Writer, dib: bmpfile_dib_info) {
     write_file_writer(writer, btranspose_32u_le(dib.header_size));
     write_file_writer(writer, btranspose_32i_le(dib.width));
@@ -113,18 +122,110 @@ _bmp_write_dib :: #force_inline proc(writer: io.Writer, dib: bmpfile_dib_info) {
     write_file_writer(writer, btranspose_32u_le(dib.num_important_colors));
 }
 
-_bmp_write_data :: #force_inline proc(writer: io.Writer, data: []BGR8, size: ImageSize) {
-    padding := (4 - ((size.x * 3) % 4)) % 4;
+@(private="file")
+_bmp_data_convert8 :: #force_inline proc(data_before: []BGR8, size: ImageSize) -> []u8 {
+    #no_bounds_check data_after := make([]u8, len(data_before) * 4);
+
     for y in 0..<size.y {
         for x in 0..<size.x {
-            write_file_writer(writer, { data[y * size.x + x].r.data, data[y * size.x + x].g.data, data[y * size.x + x].b.data });
+            bgr := data_before[y * size.x + x];
+            data_after[(y*size.x + x)*4 + 0] = bgr.r.data;
+            data_after[(y*size.x + x)*4 + 1] = bgr.g.data;
+            data_after[(y*size.x + x)*4 + 2] = bgr.b.data;
+            data_after[(y*size.x + x)*4 + 3] = 0;
         }
-        for i in 0..<padding do write_file_writer(writer, { u8(0) });
     }
+
+    return data_after;
 }
 
-bmp_write :: proc { bmp_write_bgr8, bmp_write_bgr16, bmp_write_bgr32 }
+@(private="file")
+_bmp_data_convert16 :: #force_inline proc(data_before: []BGR16, size: ImageSize) -> []u8 {    
+    #no_bounds_check data_after := make([]u8, len(data_before) * 4 * size_of(u16));
 
+    for y in 0..<size.y {
+        for x in 0..<size.x {
+            pos := y * size.x + x;
+            bgr := data_before[pos];
+            {
+                r := btranspose_16u(bgr.r.data);
+                data_after[pos * 4 + 0] = r[0];
+                data_after[pos * 4 + 1] = r[1];
+            }
+            {
+                g := btranspose_16u(bgr.g.data);
+                data_after[pos * 4 + 2] = g[0];
+                data_after[pos * 4 + 3] = g[1];
+            }
+            {
+                b := btranspose_16u(bgr.b.data);
+                data_after[pos * 4 + 4] = b[0];
+                data_after[pos * 4 + 5] = b[1];
+            }
+            {
+                x := btranspose_16u(bgr.x.data);
+                data_after[pos * 4 + 6] = x[0];
+                data_after[pos * 4 + 7] = x[1];
+            }
+        }
+    }
+
+    return data_after;
+}
+
+@(private="file")
+_bmp_data_convert32 :: #force_inline proc(data_before: []BGR32, size: ImageSize) -> []u8 {    
+    #no_bounds_check data_after := make([]u8, len(data_before) * 4 * size_of(u32));
+
+    for y in 0..<size.y {
+        for x in 0..<size.x {
+            pos := y * size.x + x;
+            bgr := data_before[pos];
+            {
+                r := btranspose_32u(bgr.r.data);
+                data_after[pos * 4 + 0] = r[0];
+                data_after[pos * 4 + 1] = r[1];
+                data_after[pos * 4 + 2] = r[2];
+                data_after[pos * 4 + 3] = r[3];
+            }
+            {
+                g := btranspose_32u(bgr.g.data);
+                data_after[pos * 4 + 4] = g[0];
+                data_after[pos * 4 + 5] = g[1];
+                data_after[pos * 4 + 6] = g[0];
+                data_after[pos * 4 + 7] = g[1];
+            }
+            {
+                b := btranspose_32u(bgr.b.data);
+                data_after[pos * 4 + 8]  = b[0];
+                data_after[pos * 4 + 9]  = b[1];
+                data_after[pos * 4 + 10] = b[2];
+                data_after[pos * 4 + 11] = b[3];
+            }
+            {
+                x := btranspose_32u(bgr.x.data);
+                data_after[pos * 4 + 12] = x[0];
+                data_after[pos * 4 + 13] = x[1];
+                data_after[pos * 4 + 14] = x[2];
+                data_after[pos * 4 + 15] = x[3];
+            }
+        }
+    }
+
+    return data_after;
+}
+
+@(private="file")
+_bmp_data_convert :: proc { _bmp_data_convert8, _bmp_data_convert16, _bmp_data_convert32 }
+
+@(private="file")
+_bmp_write_data :: #force_inline proc(writer: io.Writer, data: []u8) {
+    write_file_writer(writer, data);
+}
+
+bmp_write :: proc { bmp_write_bgr }
+
+/* BMP READ */
 bmp_read_bgr_auto :: proc() -> RawImage {
     return {};
 }

@@ -214,27 +214,27 @@ has_file_type :: proc(file_path: string, type: string) -> bool {
 write_to_file_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), fwd: FileWriteDescriptor) {
     switch fwd.write_format {
         case .PPM:
-            if !has_file_type(fwd.file_path, "ppm") {
+            if has_file_type(fwd.file_path, "ppm") do ppm_write2_bgr(img, fwd.file_path);
+            else {
                 new_file_path := strings.concatenate({ fwd.file_path, ".ppm" });
                 ppm_write2_bgr(img, new_file_path);
                 delete(new_file_path);
             }
-            else do ppm_write2_bgr(img, fwd.file_path);
             break;
         case .BMP:
-            if !has_file_type(fwd.file_path, "bmp") {
-                new_file_path := strings.concatenate({ fwd.file_path, ".png" });
+            if has_file_type(fwd.file_path, "bmp") do bmp_write(img, fwd.file_path);
+            else {
+                new_file_path := strings.concatenate({ fwd.file_path, ".bmp" });
                 bmp_write(img, new_file_path);
                 delete(new_file_path);
-            }
-            else do bmp_write(img, fwd.file_path);
+            } 
         case .PNG:
-            if !has_file_type(fwd.file_path, "png") {
+            if has_file_type(fwd.file_path, "png") do png_write(img, fwd.file_path);
+            else {
                 new_file_path := strings.concatenate({ fwd.file_path, ".png" });
                 png_write(img, new_file_path);
                 delete(new_file_path);
             }
-            else do png_write(img, fwd.file_path);
         case:
             assert(false, "Cannot happen...");
     }

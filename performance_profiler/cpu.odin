@@ -1,21 +1,42 @@
 package performance_profiler
 
+import "core:time"
+import "core:runtime"
+
 CPUTimeStampDescription :: struct {
-    function: cstring,
+    function: runtime.Source_Code_Location,
 }
 
 CPUTimeStamp :: struct {
-    begin   : f32,
-    end     : f32,
+    begin   : i64,
+    end     : i64,
     _desc   : CPUTimeStampDescription, 
 }
 
-begin_time_stamp :: proc() {
-    assert(false, "TO DO!");
+begin_time_stamp :: #force_inline proc "naked" (location := #caller_location) -> CPUTimeStamp {
+    return {
+        begin = time.now()._nsec,
+        end = 0,
+        _desc = {
+            function = location,
+        },
+    };
 }
 
-end_time_stamp :: proc() {
-    assert(false, "TO DO!");
+end_time_stamp :: #force_inline proc "naked" (using stamp: ^CPUTimeStamp) {
+    end = time.now()._nsec; 
+}
+
+delta_seconds :: #force_inline proc "naked" (using cpu: ^CPUTimeStamp) -> i64 {
+    return (end - begin) / 1e9;
+}
+
+delta_milliseconds :: #force_inline proc "naked" (using cpu: ^CPUTimeStamp) -> i64 {
+    return (end - begin) / 1e6;
+}
+
+delta_microseconds :: #force_inline proc "naked" (using cpu: ^CPUTimeStamp) -> i64 {
+    return (end - begin) / 1e3;
 }
 
 CPUTimer :: struct {
@@ -26,6 +47,15 @@ init_cpu_timer :: proc() -> CPUTimer {
     return CPUTimer {
         stamps = make([dynamic]CPUTimeStamp),
     };
+}
+
+begin :: proc(using timer: ^CPUTimer, location := #caller_location) {
+    append(&stamps, begin_time_stamp(location));
+}
+
+end :: proc(using timer: ^CPUTimer) -> ^CPUTimeStamp {
+    end_time_stamp(&stamps[len(stamps) - 1]);
+    return &stamps[len(stamps) - 1];
 }
 
 dump_cpu_timer :: proc(timer: ^CPUTimer) {
