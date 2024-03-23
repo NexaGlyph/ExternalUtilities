@@ -1,12 +1,14 @@
-package image
+package png
 
-import "core:image/png"
 import "core:mem"
+import "core:strings"
 import "core:os"
 import "core:io"
-import "core:log"
+// import "core:log"
 
-import "../optional"
+import "../../optional"
+import "../"
+import "../utils"
 
 _4BYTE_MAX_VALUE :: (1 << 31) - 1;
 CHUNK_MAX_LENGTH :: _4BYTE_MAX_VALUE;
@@ -107,6 +109,7 @@ crc32 :: proc(type: [4]u8, data: []byte) -> u32 {
     crc := u32(0xffffffff);
     for i in 0..<4 do crc = CRC_TABLE[(crc ~ u32(type[i])) & 255] ~ (crc >> 8);
     for i in 0..<len(data) do crc = CRC_TABLE[(crc ~ u32(data[i])) & 255] ~ (crc >> 8);
+    // log.errorf("%v", ~crc);
     return ~crc;
 }
 
@@ -160,8 +163,8 @@ CRC_IHDR_Data :: struct {
 
 get_crc_ihdr_data_buffer :: #force_inline proc(data: ^IHDR_Data) -> CRC_IHDR_Data {
     return {
-        btranspose_32u(data^.width),
-        btranspose_32u(data^.height),
+        utils.btranspose_32u(data^.width),
+        utils.btranspose_32u(data^.height),
         data^.bit_depth,
         data^.color_type,
         data^.m_compression,
@@ -192,12 +195,12 @@ get_crc_ihdr_data_array :: #force_inline proc(data: ^CRC_IHDR_Data) -> []u8 {
 IHDR_DataLength :: 2 * size_of(u32) + 5 * size_of(u8);
 
 @(private="file")
-init_IHDR :: #force_inline proc(size: ImageSize, img_type: ImageTypeUUID, bit_depth: u8) -> IHDR {
+init_IHDR :: #force_inline proc(size: image.ImageSize, img_type: image.ImageTypeUUID, bit_depth: u8) -> IHDR {
     data := IHDR_Data {
         width = size.x,
         height = size.y,
         bit_depth = bit_depth,
-        color_type = img_type == BGR_UUID ? COLOR_TYPE_RGB : COLOR_TYPE_RGBA,
+        color_type = img_type == image.BGR_UUID ? COLOR_TYPE_RGB : COLOR_TYPE_RGBA,
         m_compression = 0,
         m_filter = 0,
         m_interlace = 0,
@@ -270,11 +273,11 @@ CRC_IDAT_Data :: struct {
 
 // CRC_IDAT_DataBlock_conversion :: proc(block: IDAT_DataBlock, block_size: int) -> []u8 {
 //     converted_block := make([]u8, block_size);
-//     copy(converted_block[0:2], btranspose_16u(block.length));
+//     copy(converted_block[0:2], utils.btranspose_16u(block.length));
 //     converted_block[3] = block.zlib_header.CMF;
 //     converted_block[4] = block.zlib_header.FLG;
 //     mem.copy(raw_data(converted_block[5:]), raw_data(block.compressed_data), block_size - RAW_IDAT_DATA_BLOCK_SIZE);
-//     copy(converted_block[5 + block_size - RAW_IDAT_DATA_BLOCK_SIZE:], btranspose_32u(block.adler));
+//     copy(converted_block[5 + block_size - RAW_IDAT_DATA_BLOCK_SIZE:], utils.btranspose_32u(block.adler));
 //     return converted_block;
 // }
 
@@ -291,7 +294,7 @@ CRC_IDAT_Data :: struct {
 //     return crc_byte_array;
 // }
 
-compress8 :: proc(data_to_compress: []BGR8) -> []u8 {
+compress8 :: proc(data_to_compress: []image.BGR8) -> []u8 {
     data := make([]u8, len(data_to_compress) * 3);
     for index in 0..<len(data_to_compress) {
         data[index * 3] = data_to_compress[index].r.data;
@@ -301,17 +304,17 @@ compress8 :: proc(data_to_compress: []BGR8) -> []u8 {
     return data;
 }
 
-compress16 :: proc(data_to_compress: []BGR16) -> []u8 {
+compress16 :: proc(data_to_compress: []image.BGR16) -> []u8 {
     assert(false, "TO DO: REINTERPRET");
-    for bgr in data_to_compress {
+    for _ in data_to_compress {
 
     }
     return {};
 }
 
-compress32 :: proc(data_to_compress: []BGR32) -> []u8 {
+compress32 :: proc(data_to_compress: []image.BGR32) -> []u8 {
     assert(false, "TO DO: REINTERPRET");
-    for bgr in data_to_compress {
+    for _ in data_to_compress {
 
     }
     return {};
@@ -319,7 +322,7 @@ compress32 :: proc(data_to_compress: []BGR32) -> []u8 {
 
 compress :: proc { compress8, compress16, compress32 }
 
-init_IDAT :: proc(data: ^IDAT, data_to_compress: []BGR($PixelDataT)) {
+init_IDAT :: proc(data: ^IDAT, data_to_compress: []image.BGR($PixelDataT)) {
     // IDAT_Data
     compressed_data: []u8 = compress(data_to_compress);
     defer delete(compressed_data);
@@ -426,46 +429,61 @@ png_read_chunk :: proc() {}
 /* WRITE */
 png_write :: proc { png_write_bgr8, png_write_bgr16, png_write_bgr32 }
 
-png_write_bgr8  :: proc(using img: ^ImageBGR8, file_path: string) {
+@(private="file")
+has_file_type :: #force_inline proc(file_path: string, type: string) -> bool {
+    length := len(file_path);
+    return file_path[length - 1] == type[2] && file_path[length - 2] == type[1] && file_path[length - 3] == type[0];
+}
+
+png_write_bgr8  :: proc(using img: ^image.ImageBGR8, file_path: string) {
     png := PNG_Schema{};
     defer {
         for block in &png.data.compressed_blocks do dump_data_block(&block);
         delete(png.data.compressed_blocks);
     }
    
-    log.infof("[PNG-WRITE-BEGIN]");
+    // log.infof("[PNG-WRITE-BEGIN]");
 
-    png.header  = init_IHDR(size, BGR_UUID, 8);
-    log.infof("[PNG-WRITE]: HEADER CREATED!");
+    png.header  = init_IHDR(size, image.BGR_UUID, 8);
+    // log.infof("[PNG-WRITE]: HEADER CREATED!");
     png.palette = init_PLTE();
-    log.infof("[PNG-WRITE]: PALATTE CREATED!");
+    // log.infof("[PNG-WRITE]: PALATTE CREATED!");
     init_IDAT(&png.data, data);
-    log.infof("[PNG-WRITE]: DATA CREATED!");
+    // log.infof("[PNG-WRITE]: DATA CREATED!");
     png.end     = init_IEND();
-    log.infof("[PNG-WRITE]: END CREATED!");
+    // log.infof("[PNG-WRITE]: END CREATED!");
 
-    handle, ok := os.open(file_path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC);
+    handle: os.Handle;
+    ok: os.Errno;
+    {
+        if has_file_type(file_path, "png") do handle, ok = os.open(file_path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC);
+        else {
+            new_file_path := strings.concatenate({ file_path, ".png" });
+            handle, ok = os.open(new_file_path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC);
+            delete(new_file_path);
+        }
+    }
     defer os.close(handle);
 
     if ok != os.ERROR_NONE {
-        log.errorf("%v", ok);
+        // log.errorf("%v", ok);
         assert(false, "Failed to open file [png] for writing");
     }
     
     _png_write(&png, { os.stream_from_handle(handle) });
     
-    log.infof("[PNG-WRITE-END]");
+    // log.infof("[PNG-WRITE-END]");
 }
 
-png_write_bgr16 :: proc(using img: ^ImageBGR16, file_path: string) {
+png_write_bgr16 :: proc(using img: ^image.ImageBGR16, file_path: string) {
     assert(false, "TO DO!");
 }
-png_write_bgr32 :: proc(using img: ^ImageBGR32, file_path: string) {
+png_write_bgr32 :: proc(using img: ^image.ImageBGR32, file_path: string) {
     assert(false, "TO DO!");
 }
 
 @(private="file")
-_png_write :: proc(using schema: ^PNG_Schema, writer: io.Writer) {
+_png_write :: #force_inline proc(using schema: ^PNG_Schema, writer: io.Writer) {
     png_write_header(writer);
     png_write_chunk(&header, writer);
     // png_write_chunk(optional.get(&palette), writer);
@@ -485,14 +503,16 @@ png_write_chunk :: proc(using chunk: ^Chunk($T), writer: io.Writer) {
     _write_file_safe(writer, _transpose_chunk_length(length));
     _write_file_safe(writer, type[:]);
     png_write_chunk_data(writer, &data);
-    _write_file_safe(writer, btranspose_32u(crc)); 
+    // log.errorf("%v", crc);
+    // log.infof("%v", utils.btranspose_32u(crc));
+    _write_file_safe(writer, utils.btranspose_32u(crc)); 
 }
 
 png_write_chunk_data :: proc { png_write_header_chunk_data, png_write_palette_chunk_data, png_write_data_chunk_data, png_write_end_chunk_data }
 
 png_write_header_chunk_data  :: proc(writer: io.Writer, header: ^IHDR_Data) {
-    _write_file_safe(writer, btranspose_32u(header^.width));
-    _write_file_safe(writer, btranspose_32u(header^.height));
+    _write_file_safe(writer, utils.btranspose_32u(header^.width));
+    _write_file_safe(writer, utils.btranspose_32u(header^.height));
     _write_file_safe(writer, { header^.bit_depth, header^.color_type, header^.m_compression, header^.m_filter, header^.m_interlace });
 }
 
@@ -500,21 +520,21 @@ png_write_palette_chunk_data :: proc(writer: io.Writer, palette: ^PLTE_Data) {
     entries: []u8 = make([]u8, len(palette^.entries) * len(PaletteEntry));
     defer delete(entries);
     mem.copy(raw_data(entries), raw_data(palette^.entries), len(entries));
-    log.warnf("MAKE SURE THAT THIS COPY IS SUCCESSFULL");
+    // log.warnf("MAKE SURE THAT THIS COPY IS SUCCESSFULL");
     _write_file_safe(writer, entries);
 }
 
 png_write_data_chunk_data    :: proc(writer: io.Writer, data: ^IDAT_Data) {
     for block in data^.compressed_blocks {
-        _write_file_safe(writer, btranspose_16u(block.length));
-        // log.infof("%v", btranspose_16u(block.length));
+        _write_file_safe(writer, utils.btranspose_16u(block.length));
+        // log.infof("%v", utils.btranspose_16u(block.length));
         _write_file_safe(writer, { block.zlib_header.CMF, block.zlib_header.FLG });
         // log.infof("%v .... %v", block.zlib_header.CMF, block.zlib_header.FLG);
         _write_file_safe(writer, block.compressed_data);
-        log.infof("%v", block.compressed_data);
-        log.infof("%v", len(block.compressed_data));
-        _write_file_safe(writer, btranspose_32u(block.adler));
-        // log.infof("%v", btranspose_32u(block.adler));
+        // log.infof("%v", block.compressed_data);
+        // log.infof("%v", len(block.compressed_data));
+        _write_file_safe(writer, utils.btranspose_32u(block.adler));
+        // log.infof("%v", utils.btranspose_32u(block.adler));
     }
 }
 
@@ -522,18 +542,7 @@ png_write_data_chunk_data    :: proc(writer: io.Writer, data: ^IDAT_Data) {
 png_write_end_chunk_data     :: proc(writer: io.Writer, end: ^IEND_Data) {}
 
 @(private="file")
-/*>>>NOTE: MAKE THIS WRITER STRATEGY FOR ALL THE IMAGE TYPES */
-_write_file_safe :: proc(writer: io.Writer, data: []byte) {
-    size, err := io.write(writer, data);
-    if err != .None {
-        log.errorf("%v", err);
-        assert(false, "write file failed!");
-    }
-    assert(size == len(data), "Failed to write whole buffer!");
-}
-
-@(private="file")
-_transpose_chunk_length :: proc(value: u32be) -> []u8 {
+_transpose_chunk_length :: #force_inline proc "fastcall" (value: u32be) -> []u8 {
     return {
         cast(u8)(value >> 24),
         cast(u8)(value >> 16),

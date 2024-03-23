@@ -1,6 +1,6 @@
 package performance_profiler
 
-import D3D11 "vendor:directx/d3d11"
+// import D3D11 "vendor:directx/d3d11"
 
 import "../logger"
 

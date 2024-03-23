@@ -1,8 +1,11 @@
-package image
+package bmp
 
 import "core:io"
 import "core:os"
 import "core:log"
+
+import "../../image"
+import "../utils"
 
 /* ALL OF THE OTHER ERRORS (LIKE IN WRITING) ARE USUALLY CAUGHT WITH THE UITLITY FUNCTIONS AND ARE ASSERTED */
 BMP_Error :: enum {
@@ -27,7 +30,8 @@ bmpfile_header :: struct {
     creator2: u16,
     bmp_offset: u32,
 }
-BMP_OFFSET :: size_of(bmpfile_magic) + size_of(bmpfile_header) + size_of(bmpfile_dib_info);
+/* 432 = 16 + 96 + 320 */
+BMP_OFFSET :: (2 * size_of(u8)) + (2 * size_of(u32) + 2 * size_of(u16)) + (5 * size_of(u32) + 4 * size_of(i32) + 2 * size_of(u16))
 
 bmpfile_dib_info :: struct {
     header_size: u32,
@@ -43,7 +47,7 @@ bmpfile_dib_info :: struct {
     num_important_colors: u32,
 }
 
-init_header :: proc(size: ImageSize) -> bmpfile_header {
+init_header :: proc(size: image.ImageSize) -> bmpfile_header {
     return {
         file_size  = BMP_OFFSET + size.x * size.y * 3,
         creator1   = u16(0),
@@ -52,7 +56,7 @@ init_header :: proc(size: ImageSize) -> bmpfile_header {
     };
 }
 
-init_dib :: proc(size: ImageSize, bit_depth: u16) -> bmpfile_dib_info {
+init_dib :: proc(size: image.ImageSize, bit_depth: u16) -> bmpfile_dib_info {
     return {
         header_size = size_of(bmpfile_dib_info),
         width = i32(size.x),
@@ -81,7 +85,7 @@ _bmp_write_begin :: proc(file_path: string) -> os.Handle {
     return handle;
 }
 
-bmp_write_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), file_path: string) {
+bmp_write_bgr :: proc(using img: ^image.Image2(image.BGR($PixelDataT)), file_path: string) {
     handle := _bmp_write_begin(file_path);
     writer := io.Writer { os.stream_from_handle(handle) };
     defer os.close(handle);
@@ -89,41 +93,41 @@ bmp_write_bgr :: proc(using img: ^Image2(BGR($PixelDataT)), file_path: string) {
    
     _bmp_write_magic(writer);
     _bmp_write_header(writer, init_header(size));
-    _bmp_write_dib(writer, init_dib(size, 8 * size_of(PixelDataT)));
-    bmp_array := _bmp_data_convert(data, size);
-    _bmp_write_data(writer, bmp_array);
+    // _bmp_write_dib(writer, init_dib(size, 8 * size_of(PixelDataT)));
+    // bmp_array := _bmp_data_convert(data, size);
+    // _bmp_write_data(writer, bmp_array);
 }
 
 @(private="file")
 _bmp_write_magic :: #force_inline proc(writer: io.Writer) {
-    write_file_writer(writer, { 'B', 'M' });
+    utils.write_file_safe(writer, { 'B', 'M' });
 }
 
 @(private="file")
 _bmp_write_header :: #force_inline proc(writer: io.Writer, header: bmpfile_header) {
-    write_file_writer(writer, btranspose_32u_le(header.file_size));
-    write_file_writer(writer, btranspose_16u_le(header.creator1));
-    write_file_writer(writer, btranspose_16u_le(header.creator2));
-    write_file_writer(writer, btranspose_32u_le(header.bmp_offset));
+    utils.write_file_safe(writer, utils.btranspose_32u_le(BMP_OFFSET + 12));
+    utils.write_file_safe(writer, utils.btranspose_16u_le(0));
+    utils.write_file_safe(writer, utils.btranspose_16u_le(0));
+    utils.write_file_safe(writer, utils.btranspose_32u_le(BMP_OFFSET));
 }
 
 @(private="file")
 _bmp_write_dib :: #force_inline proc(writer: io.Writer, dib: bmpfile_dib_info) {
-    write_file_writer(writer, btranspose_32u_le(dib.header_size));
-    write_file_writer(writer, btranspose_32i_le(dib.width));
-    write_file_writer(writer, btranspose_32i_le(dib.height));
-    write_file_writer(writer, btranspose_16u_le(dib.num_planes));
-    write_file_writer(writer, btranspose_16u_le(dib.bits_per_pixel));
-    write_file_writer(writer, btranspose_32u_le(dib.compression));
-    write_file_writer(writer, btranspose_32u_le(dib.bmp_byte_size));
-    write_file_writer(writer, btranspose_32i_le(dib.hres));
-    write_file_writer(writer, btranspose_32i_le(dib.vres));
-    write_file_writer(writer, btranspose_32u_le(dib.num_colors));
-    write_file_writer(writer, btranspose_32u_le(dib.num_important_colors));
+    utils.write_file_safe(writer, utils.btranspose_32u_le(dib.header_size));
+    utils.write_file_safe(writer, utils.btranspose_32i_le(dib.width));
+    utils.write_file_safe(writer, utils.btranspose_32i_le(dib.height));
+    utils.write_file_safe(writer, utils.btranspose_16u_le(dib.num_planes));
+    utils.write_file_safe(writer, utils.btranspose_16u_le(dib.bits_per_pixel));
+    utils.write_file_safe(writer, utils.btranspose_32u_le(dib.compression));
+    utils.write_file_safe(writer, utils.btranspose_32u_le(dib.bmp_byte_size));
+    utils.write_file_safe(writer, utils.btranspose_32i_le(dib.hres));
+    utils.write_file_safe(writer, utils.btranspose_32i_le(dib.vres));
+    utils.write_file_safe(writer, utils.btranspose_32u_le(dib.num_colors));
+    utils.write_file_safe(writer, utils.btranspose_32u_le(dib.num_important_colors));
 }
 
 @(private="file")
-_bmp_data_convert8 :: #force_inline proc(data_before: []BGR8, size: ImageSize) -> []u8 {
+_bmp_data_convert8 :: #force_inline proc(data_before: []image.BGR8, size: image.ImageSize) -> []u8 {
     #no_bounds_check data_after := make([]u8, len(data_before) * 4);
 
     for y in 0..<size.y {
@@ -140,7 +144,7 @@ _bmp_data_convert8 :: #force_inline proc(data_before: []BGR8, size: ImageSize) -
 }
 
 @(private="file")
-_bmp_data_convert16 :: #force_inline proc(data_before: []BGR16, size: ImageSize) -> []u8 {    
+_bmp_data_convert16 :: #force_inline proc(data_before: []image.BGR16, size: image.ImageSize) -> []u8 {    
     #no_bounds_check data_after := make([]u8, len(data_before) * 4 * size_of(u16));
 
     for y in 0..<size.y {
@@ -148,22 +152,22 @@ _bmp_data_convert16 :: #force_inline proc(data_before: []BGR16, size: ImageSize)
             pos := y * size.x + x;
             bgr := data_before[pos];
             {
-                r := btranspose_16u(bgr.r.data);
+                r := utils.btranspose_16u(bgr.r.data);
                 data_after[pos * 4 + 0] = r[0];
                 data_after[pos * 4 + 1] = r[1];
             }
             {
-                g := btranspose_16u(bgr.g.data);
+                g := utils.btranspose_16u(bgr.g.data);
                 data_after[pos * 4 + 2] = g[0];
                 data_after[pos * 4 + 3] = g[1];
             }
             {
-                b := btranspose_16u(bgr.b.data);
+                b := utils.btranspose_16u(bgr.b.data);
                 data_after[pos * 4 + 4] = b[0];
                 data_after[pos * 4 + 5] = b[1];
             }
             {
-                x := btranspose_16u(bgr.x.data);
+                x := utils.btranspose_16u(bgr.x.data);
                 data_after[pos * 4 + 6] = x[0];
                 data_after[pos * 4 + 7] = x[1];
             }
@@ -174,7 +178,7 @@ _bmp_data_convert16 :: #force_inline proc(data_before: []BGR16, size: ImageSize)
 }
 
 @(private="file")
-_bmp_data_convert32 :: #force_inline proc(data_before: []BGR32, size: ImageSize) -> []u8 {    
+_bmp_data_convert32 :: #force_inline proc(data_before: []image.BGR32, size: image.ImageSize) -> []u8 {    
     #no_bounds_check data_after := make([]u8, len(data_before) * 4 * size_of(u32));
 
     for y in 0..<size.y {
@@ -182,28 +186,28 @@ _bmp_data_convert32 :: #force_inline proc(data_before: []BGR32, size: ImageSize)
             pos := y * size.x + x;
             bgr := data_before[pos];
             {
-                r := btranspose_32u(bgr.r.data);
+                r := utils.btranspose_32u(bgr.r.data);
                 data_after[pos * 4 + 0] = r[0];
                 data_after[pos * 4 + 1] = r[1];
                 data_after[pos * 4 + 2] = r[2];
                 data_after[pos * 4 + 3] = r[3];
             }
             {
-                g := btranspose_32u(bgr.g.data);
+                g := utils.btranspose_32u(bgr.g.data);
                 data_after[pos * 4 + 4] = g[0];
                 data_after[pos * 4 + 5] = g[1];
                 data_after[pos * 4 + 6] = g[0];
                 data_after[pos * 4 + 7] = g[1];
             }
             {
-                b := btranspose_32u(bgr.b.data);
+                b := utils.btranspose_32u(bgr.b.data);
                 data_after[pos * 4 + 8]  = b[0];
                 data_after[pos * 4 + 9]  = b[1];
                 data_after[pos * 4 + 10] = b[2];
                 data_after[pos * 4 + 11] = b[3];
             }
             {
-                x := btranspose_32u(bgr.x.data);
+                x := utils.btranspose_32u(bgr.x.data);
                 data_after[pos * 4 + 12] = x[0];
                 data_after[pos * 4 + 13] = x[1];
                 data_after[pos * 4 + 14] = x[2];
@@ -220,17 +224,17 @@ _bmp_data_convert :: proc { _bmp_data_convert8, _bmp_data_convert16, _bmp_data_c
 
 @(private="file")
 _bmp_write_data :: #force_inline proc(writer: io.Writer, data: []u8) {
-    write_file_writer(writer, data);
+    utils.write_file_safe(writer, data);
 }
 
 bmp_write :: proc { bmp_write_bgr }
 
 /* BMP READ */
-bmp_read_bgr_auto :: proc() -> RawImage {
+bmp_read_bgr_auto :: proc() -> image.RawImage {
     return {};
 }
 
-bmp_read_bgr8 :: proc(file_path: string) -> (ImageBGR8, BMP_Error) {
+bmp_read_bgr8 :: proc(file_path: string) -> (image.ImageBGR8, BMP_Error) {
     handle, ok := os.open(file_path, os.O_RDONLY);
     defer os.close(handle);
 
@@ -255,15 +259,15 @@ bmp_read_bgr8 :: proc(file_path: string) -> (ImageBGR8, BMP_Error) {
     return {}, .E_NONE;
 }
 
-bmp_read_bgr16 :: proc() -> ImageBGR16 {
+bmp_read_bgr16 :: proc() -> image.ImageBGR16 {
     return {};
 }
 
-bmp_read_bgr32 :: proc() -> ImageBGR32 {
+bmp_read_bgr32 :: proc() -> image.ImageBGR32 {
     return {};
 }
 
-validate_magic :: proc(magic: [2]u8) -> BMP_Error {
+validate_magic :: #force_inline proc "fastcall" (magic: [2]u8) -> BMP_Error {
     if magic[0] != 'B' || magic[1] != 'M' do return .E_READ_INVALID_FILE_FORMAT;
     return .E_NONE;
 }
@@ -282,13 +286,13 @@ _bmp_read_header :: proc(reader: io.Reader) -> (BMP_Error, bmpfile_header) {
     header := bmpfile_header{};
     {
         next := 0;
-        header.file_size  = u32_le_transpose(header_binary[next:next + size_of(u32)]);
+        header.file_size  = utils.u32_le_transpose(header_binary[next:next + size_of(u32)]);
         next += size_of(u32);
-        header.creator1   = u16_le_transpose(header_binary[next:next + size_of(u16)]);
+        header.creator1   = utils.u16_le_transpose(header_binary[next:next + size_of(u16)]);
         next += size_of(u16);
-        header.creator2   = u16_le_transpose(header_binary[next:next + size_of(u16)]);
+        header.creator2   = utils.u16_le_transpose(header_binary[next:next + size_of(u16)]);
         next += size_of(u16);
-        header.bmp_offset = u32_le_transpose(header_binary[next:next + size_of(u32)]);
+        header.bmp_offset = utils.u32_le_transpose(header_binary[next:next + size_of(u32)]);
     }
 
     return .E_NONE, header; // for now, no error checking
@@ -303,37 +307,37 @@ _bmp_read_dib :: proc(reader: io.Reader) -> (BMP_Error, bmpfile_dib_info) {
     {
         next := 0;
         // header size
-        dib.header_size = u32_le_transpose(dib_binary[next:next + size_of(u32)]);
+        dib.header_size = utils.u32_le_transpose(dib_binary[next:next + size_of(u32)]);
         next += size_of(u32);
         // width
-        dib.width   = i32_le_transpose(dib_binary[next:next + size_of(i32)]);
+        dib.width   = utils.i32_le_transpose(dib_binary[next:next + size_of(i32)]);
         next += size_of(i32);
         // height
-        dib.height = i32_le_transpose(dib_binary[next:next + size_of(i32)]);
+        dib.height = utils.i32_le_transpose(dib_binary[next:next + size_of(i32)]);
         next += size_of(i32);
         // number of planes
-        dib.num_planes = u16_le_transpose(dib_binary[next:next + size_of(u16)]);
+        dib.num_planes = utils.u16_le_transpose(dib_binary[next:next + size_of(u16)]);
         next += size_of(u16);
         // bit depth
-        dib.bits_per_pixel = u16_le_transpose(dib_binary[next:next + size_of(u16)]);
+        dib.bits_per_pixel = utils.u16_le_transpose(dib_binary[next:next + size_of(u16)]);
         next += size_of(u16);
         // compression
-        dib.compression = u32_le_transpose(dib_binary[next:next + size_of(u32)]);
+        dib.compression = utils.u32_le_transpose(dib_binary[next:next + size_of(u32)]);
         next += size_of(u32);
         // byte size
-        dib.bmp_byte_size = u32_le_transpose(dib_binary[next:next + size_of(u32)]);
+        dib.bmp_byte_size = utils.u32_le_transpose(dib_binary[next:next + size_of(u32)]);
         next += size_of(u32);
         // hres
-        dib.hres = i32_le_transpose(dib_binary[next:next + size_of(i32)]);
+        dib.hres = utils.i32_le_transpose(dib_binary[next:next + size_of(i32)]);
         next += size_of(i32);
         // vres
-        dib.vres = i32_le_transpose(dib_binary[next:next + size_of(i32)]);
+        dib.vres = utils.i32_le_transpose(dib_binary[next:next + size_of(i32)]);
         next += size_of(i32);
         // palette
-        dib.num_colors = u32_le_transpose(dib_binary[next:next + size_of(u32)]);
+        dib.num_colors = utils.u32_le_transpose(dib_binary[next:next + size_of(u32)]);
         next += size_of(u32);
         // important colors
-        dib.num_important_colors = u32_le_transpose(dib_binary[next:next + size_of(u32)]);
+        dib.num_important_colors = utils.u32_le_transpose(dib_binary[next:next + size_of(u32)]);
     }
 
     return .E_NONE, dib;

@@ -2,8 +2,9 @@ package main
 
 import "core:log"
 
-import image "ExternalUtilities/image"
-import performance "ExternalUtilities/performance_profiler"
+import image       "../../image"
+import performance "../../performance_profiler"
+import png         "../png"
 
 main :: proc() {
     context.logger = log.create_console_logger();
@@ -14,7 +15,7 @@ main :: proc() {
     performance.begin(&profiler);
     {
         generated_image := image.ImageBGR8{
-            size = image.IMAGE_SIZE(100, 100),
+            size = image.IMAGE_SIZE(5, 5),
         };
         image.generate_random_image_ubgr(&generated_image);
         defer image.dump_image2(&generated_image);
@@ -22,10 +23,7 @@ main :: proc() {
         assert(generated_image.info & image.IMAGE_INFO_IMAGE_TYPE_UUID_MASK == image.BGR_UUID, "UUID (IMAGE_TYPE) IS INCORRECT");
         assert(generated_image.info & image.IMAGE_INFO_PIXEL_TYPE_UUID_MASK == (image.UINT8_UUID << 4), "UUID (PIXEL_TYPE) IS INCORRECT");
 
-        image.write(&generated_image, image.FileWriteDescriptor {
-            write_format = .PNG,
-            file_path = "bgr8",
-        });
+        png.png_write_bgr8(&generated_image, "bgr8.png");
     }
     stamp := performance.end(&profiler);
 
@@ -42,10 +40,8 @@ main :: proc() {
         assert(generated_image.info & image.IMAGE_INFO_IMAGE_TYPE_UUID_MASK == image.BGR_UUID, "UUID (IMAGE_TYPE) IS INCORRECT");
         assert(generated_image.info & image.IMAGE_INFO_PIXEL_TYPE_UUID_MASK == (image.UINT16_UUID << 4), "UUID (PIXEL_TYPE) IS INCORRECT");
 
-        image.write(&generated_image, image.FileWriteDescriptor {
-            write_format = .PNG,
-            file_path = "bgr16",
-        });
+        png.png_write_bgr16(&generated_image, "bgr16.png");
+        assert(false, "do the 'file extension checking'");
     }
     stamp = performance.end(&profiler);
 
@@ -62,10 +58,8 @@ main :: proc() {
         assert(generated_image.info & image.IMAGE_INFO_IMAGE_TYPE_UUID_MASK == image.BGR_UUID, "UUID (IMAGE_TYPE) IS INCORRECT");
         assert(generated_image.info & image.IMAGE_INFO_PIXEL_TYPE_UUID_MASK == (image.UINT32_UUID << 4), "UUID (PIXEL_TYPE) IS INCORRECT");
 
-        image.write(&generated_image, image.FileWriteDescriptor {
-            write_format = .PNG,
-            file_path = "bgr32",
-        });
+        png.png_write_bgr32(&generated_image, "bgr32.png");
+        assert(false, "do the 'file extension checking'");
     }
     stamp = performance.end(&profiler);
 
