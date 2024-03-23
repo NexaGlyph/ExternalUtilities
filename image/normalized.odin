@@ -2,7 +2,7 @@ package image;
 
 Unorm :: distinct f32;
 
-UnormRGB :: struct #align 4 { // even though there is no alpha channel, we will pad the struct as if there were 4th byte
+UnormRGB :: struct #align (4) { // even though there is no alpha channel, we will pad the struct as if there were 4th byte
     r, g, b: Unorm,
 }
 UnormBGR :: struct {

@@ -42,31 +42,6 @@ write_file_writer :: proc(writer: io.Writer, data: []byte, caller_location := #c
     assert(size == len(data), "Something went wrong with the writes");
 }
 
-@(private="package")
-@(require_results)
-fread :: proc(handle: os.Handle, length: int, caller_location := #caller_location) -> []byte {
-    buffer := make([]byte, length);
-    _, err := os.read(handle, buffer);
-    if err != os.ERROR_NONE {
-        log.errorf("Failed to read file %v", err);
-        delete(buffer);
-        assert(false);
-    }
-    return buffer;
-}
-
-@(private="package")
-@(require_results)
-fread_all :: proc(handle: os.Handle, caller_location := #caller_location) -> []byte {
-    buffer, err := os.read_entire_file_from_handle(handle);
-    if err != true {
-        log.errorf("Failed to read file %v", err);
-        delete(buffer);
-        assert(false);
-    }
-    return buffer;
-}
-
 /* IMAGE */
 @(private="file")
 read_from_file :: proc(using img: ^Image) {

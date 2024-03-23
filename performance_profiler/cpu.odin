@@ -13,7 +13,7 @@ CPUTimeStamp :: struct {
     _desc   : CPUTimeStampDescription, 
 }
 
-begin_time_stamp :: #force_inline proc "naked" (location := #caller_location) -> CPUTimeStamp {
+begin_time_stamp :: #force_inline proc "contextless" (location := #caller_location) -> CPUTimeStamp {
     return {
         begin = time.now()._nsec,
         end = 0,
@@ -23,19 +23,19 @@ begin_time_stamp :: #force_inline proc "naked" (location := #caller_location) ->
     };
 }
 
-end_time_stamp :: #force_inline proc "naked" (using stamp: ^CPUTimeStamp) {
+end_time_stamp :: #force_inline proc "contextless" (using stamp: ^CPUTimeStamp) {
     end = time.now()._nsec; 
 }
 
-delta_seconds :: #force_inline proc "naked" (using cpu: ^CPUTimeStamp) -> i64 {
+delta_seconds :: #force_inline proc "contextless" (using cpu: ^CPUTimeStamp) -> i64 {
     return (end - begin) / 1e9;
 }
 
-delta_milliseconds :: #force_inline proc "naked" (using cpu: ^CPUTimeStamp) -> i64 {
+delta_milliseconds :: #force_inline proc "contextless" (using cpu: ^CPUTimeStamp) -> i64 {
     return (end - begin) / 1e6;
 }
 
-delta_microseconds :: #force_inline proc "naked" (using cpu: ^CPUTimeStamp) -> i64 {
+delta_microseconds :: #force_inline proc "contextless" (using cpu: ^CPUTimeStamp) -> i64 {
     return (end - begin) / 1e3;
 }
 
@@ -50,7 +50,9 @@ init_cpu_timer :: proc() -> CPUTimer {
 }
 
 begin :: proc(using timer: ^CPUTimer, location := #caller_location) {
-    append(&stamps, begin_time_stamp(location));
+    stamp: CPUTimeStamp = {};
+    stamp = begin_time_stamp(location);
+    append(&stamps, stamp);
 }
 
 end :: proc(using timer: ^CPUTimer) -> ^CPUTimeStamp {
