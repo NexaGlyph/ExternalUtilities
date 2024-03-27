@@ -1,5 +1,7 @@
 package image;
 
+// import "core:mem"
+
 RawImageDescriptor :: ImageInfoUUID;
 
 RawImage :: struct {
@@ -10,8 +12,7 @@ RawImage :: struct {
     info: RawImageDescriptor,
 }
 
-@(private="file")
-bgr_to_raw :: #force_inline proc(using img: ^Image2(BGR($PixelData))) -> RawImage {
+bgr_to_raw :: #force_inline proc "contextless" (using img: ^Image2(BGR($PixelData))) -> RawImage {
     return {
         size = size,
         data = raw_data(data),
@@ -19,21 +20,25 @@ bgr_to_raw :: #force_inline proc(using img: ^Image2(BGR($PixelData))) -> RawImag
     };
 }
 
-@(private="file")
-rgba_to_raw :: #force_inline proc(using img: ^Image2(RGBA($PixelData))) -> (ri: RawImage) {
+rgba_to_raw :: #force_inline proc "contextless" (using img: ^Image2(RGBA($PixelData))) -> (ri: RawImage) {
     ri.size = size;
     ri.data = raw_data(data);
     ri.info = info;
     return;
 }
 
-to_raw :: proc { bgr_to_raw, rgba_to_raw }
+from_raw_bgr :: #force_inline proc(using img: ^RawImage, $PixelT: typeid) -> (final_img: Image2(PixelT)) { 
+    final_img.size = size;
+    final_img.info = info;
+    final_img.data = make([]PixelT, size.x * size.y);
+    mem.copy(raw_data(final_img.data), data, size_of(PixelT) * int(size.x * size.y));
+    return;
+}
 
-// @(private="file")
-// from_raw_bgr :: #force_inline proc(using img: ^RawImage) -> Image2(BGR($PixelData)) {
+from_raw_rgba :: #force_inline proc(using img: ^RawImage) -> Image2(RGBA($PixelData)) {
+    assert(false, "TODO!");
+}
 
-// }
-// @(private="file")
-// from_raw_rgba :: #force_inline proc(using img: ^RawImage) -> Image2(RGBA($PixelData)) {
-
-// }
+dump_raw :: #force_inline proc(using img: ^RawImage) {
+    free(data);
+}

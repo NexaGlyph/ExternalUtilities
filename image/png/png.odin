@@ -4,7 +4,7 @@ import "core:mem"
 import "core:strings"
 import "core:os"
 import "core:io"
-// import "core:log"
+import "core:log"
 
 import "../../optional"
 import "../"
@@ -250,13 +250,34 @@ MFilterType :: enum u8 {
 PLTE :: Chunk(PLTE_Data);
 PLTE_NUM_VALID_OCCURRENCES :: 1;
 
-PaletteEntry :: [3]u8;
-PLTE_Data :: struct {
-    entries: []PaletteEntry,
+PNG_PaletteEntry :: [4]u8;
+PNG_Palette :: struct($N: int) {
+    entries: [N]PNG_PaletteEntry,
 }
+
+PNG_Palette256 :: PNG_Palette(256);
+PNG_Palette64  :: PNG_Palette(64);
+PNG_Palette16  :: PNG_Palette(16);
+PNG_Palette2   :: PNG_Palette(2);
+PLTE_Data :: struct {
+    entries: []PNG_PaletteEntry,
+}
+
 PLTE_DataLength :: -1; /* >>>NOTE: TO DO */
 
-init_PLTE :: #force_inline proc() -> optional.Optional(PLTE) {
+palette_gradient :: #force_inline proc($N: int) -> [N]PNG_PaletteEntry {
+    entries := [N]PNG_PaletteEntry{};
+    for i in 0..=u8(N - 1) do entries[i] = { i, i, i, 255, };
+    return entries;
+}
+
+init_PLTE :: #force_inline proc($palette_size: int) -> optional.Optional(PLTE) {
+    // if palette_size > 0 {
+    //     palette := palette_gradient(palette_size);
+    //     byte_entries := transmute([palette_size * 4]u8)(palette);
+    //     crc := crc32(PLTE_TYPE, byte_entries[:]);
+    //     return optional.init(init_chunk(u32be(4 * palette_size), PLTE_TYPE, PLTE_Data{palette[:]}, crc));
+    // }
     return init_chunk(0, PLTE_TYPE, optional.init(PLTE), 0);
 }
 
@@ -430,7 +451,6 @@ png_read_chunk :: proc() {}
 /* WRITE */
 png_write :: proc { png_write_bgr8, png_write_bgr16, png_write_bgr32 }
 
-
 png_write_bgr8  :: proc(using img: ^image.ImageBGR8, file_path: string) {
     png := PNG_Schema{};
     defer {
@@ -438,16 +458,16 @@ png_write_bgr8  :: proc(using img: ^image.ImageBGR8, file_path: string) {
         delete(png.data.compressed_blocks);
     }
    
-    // log.infof("[PNG-WRITE-BEGIN]");
+    log.infof("[PNG-WRITE-BEGIN]");
 
     png.header  = init_IHDR(size, image.BGR_UUID, 8);
-    // log.infof("[PNG-WRITE]: HEADER CREATED!");
-    png.palette = init_PLTE();
-    // log.infof("[PNG-WRITE]: PALATTE CREATED!");
+    log.infof("[PNG-WRITE]: HEADER CREATED!");
+    png.palette = init_PLTE(256);
+    log.infof("[PNG-WRITE]: PALATTE CREATED!");
     init_IDAT(&png.data, data);
-    // log.infof("[PNG-WRITE]: DATA CREATED!");
+    log.infof("[PNG-WRITE]: DATA CREATED!");
     png.end     = init_IEND();
-    // log.infof("[PNG-WRITE]: END CREATED!");
+    log.infof("[PNG-WRITE]: END CREATED!");
 
     handle: os.Handle;
     ok: os.Errno;
@@ -517,7 +537,7 @@ png_write_header_chunk_data  :: #force_inline proc(writer: io.Writer, header: ^I
 }
 
 png_write_palette_chunk_data :: proc(writer: io.Writer, palette: ^PLTE_Data) {
-    entries: []u8 = make([]u8, len(palette^.entries) * len(PaletteEntry));
+    entries: []u8 = make([]u8, len(palette^.entries) * len(PNG_PaletteEntry));
     defer delete(entries);
     mem.copy(raw_data(entries), raw_data(palette^.entries), len(entries));
     // log.warnf("MAKE SURE THAT THIS COPY IS SUCCESSFULL");

@@ -88,16 +88,16 @@ u16_transpose :: #force_inline proc "contextless" (value: []u8) -> u16 {
 
 /* little endian */
 i32_le_transpose :: #force_inline proc "contextless" (value: []u8) -> i32 {
-    return i32(value[3]) | i32(value[2] << 8) | i32(value[1] << 16) | i32(value[0]) << 24;
+    return i32(value[0])<<0 | i32(value[1])<<8 | i32(value[2])<<16 | i32(value[3])<<24;
 }
 i16_le_transpose :: #force_inline proc "contextless" (value: []u8) -> i16 {
-    return i16(value[1]) | i16(value[0] << 8);
+    return i16(value[0]) << 0 | i16(value[1]) << 8;
 }
 u32_le_transpose :: #force_inline proc "contextless" (value: []u8) -> u32 {
-    return u32(value[3]) | u32(value[2] << 8) | u32(value[1] << 16) | u32(value[0]) << 24;
+    return u32(value[0])<<0 | u32(value[1])<<8 | u32(value[2])<<16 | u32(value[3])<<24;
 }
 u16_le_transpose :: #force_inline proc "contextless" (value: []u8) -> u16 {
-    return u16(value[1]) | u16(value[0] << 8);
+    return u16(value[0]) << 0 | u16(value[1]) << 8;
 }
 
 write_file_safe :: proc(writer: io.Writer, data: []byte, caller_location := #caller_location) {
@@ -166,7 +166,20 @@ fread_all :: proc(handle: os.Handle, caller_location := #caller_location) -> []b
     }
 }
 
+/*
+FUNCTION THAT CHECKS THE FILE EXTENSION OF THE FILE_PATH PASSED BY USER, USED INTERNALLY IN THE BMP/PPM/PNG PACKAGES
+*/
 has_file_type :: #force_inline proc "contextless" (file_path: string, type: string) -> bool {
     length := len(file_path);
     return file_path[length - 1] == type[2] && file_path[length - 2] == type[1] && file_path[length - 3] == type[0];
 }
+
+PaletteEntry :: [4]u8;
+Palette :: struct($N: int) {
+    entries: [N]PaletteEntry,
+}
+
+Palette256 :: Palette(256);
+Palette64  :: Palette(64);
+Palette16  :: Palette(16);
+Palette2   :: Palette(2);
