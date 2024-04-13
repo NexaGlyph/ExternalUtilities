@@ -3,7 +3,6 @@ package ppm
 import "core:os"
 import "core:io"
 import "core:log"
-import "core:fmt"
 
 import "../../image"
 import "../utils"
@@ -45,16 +44,15 @@ ppm_read2_bgr :: proc(using img: image.RawImage, file_path: string) {
     }
 
     {
-        using image;
         switch max_val {
-            case UPIXEL_DATA8_MAX:
-                img.info = BGR_UUID | (UINT8_UUID << 4);
+            case image.UPIXEL_DATA8_MAX:
+                img.info = image.BGR_UUID | (image.UINT8_UUID << 4);
                 break;
-            case UPIXEL_DATA16_MAX:
-                img.info = BGR_UUID | (UINT16_UUID << 4);
+            case image.UPIXEL_DATA16_MAX:
+                img.info = image.BGR_UUID | (image.UINT16_UUID << 4);
                 break;
-            case UPIXEL_DATA32_MAX:
-                img.info = BGR_UUID | (UINT32_UUID << 4);
+            case image.UPIXEL_DATA32_MAX:
+                img.info = image.BGR_UUID | (image.UINT32_UUID << 4);
                 break;
             case:
                 assert(false, "invalid max value!");
