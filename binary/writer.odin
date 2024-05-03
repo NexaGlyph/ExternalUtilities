@@ -1,0 +1,3 @@
+package binary
+
+Writer :: struct {}

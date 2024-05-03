@@ -265,19 +265,25 @@ PLTE_Data :: struct {
 
 PLTE_DataLength :: -1; /* >>>NOTE: TO DO */
 
-palette_gradient :: #force_inline proc($N: int) -> [N]PNG_PaletteEntry {
+palette_gradient :: #force_inline proc "fastcall" ($N: int) -> [N]PNG_PaletteEntry {
     entries := [N]PNG_PaletteEntry{};
     for i in 0..=u8(N - 1) do entries[i] = { i, i, i, 255, };
     return entries;
 }
 
 init_PLTE :: #force_inline proc($palette_size: int) -> optional.Optional(PLTE) {
-    // if palette_size > 0 {
-    //     palette := palette_gradient(palette_size);
-    //     byte_entries := transmute([palette_size * 4]u8)(palette);
-    //     crc := crc32(PLTE_TYPE, byte_entries[:]);
-    //     return optional.init(init_chunk(u32be(4 * palette_size), PLTE_TYPE, PLTE_Data{palette[:]}, crc));
-    // }
+    if palette_size > 0 {
+        palette := make([]PNG_PaletteEntry, palette_size);
+        defer delete(palette);
+        crc := u32(0);
+        {
+            temp_palette := palette_gradient(palette_size);
+            byte_entries := transmute([palette_size * 4]u8)(temp_palette);
+            crc = crc32(PLTE_TYPE, byte_entries[:]);
+            copy(palette[:], temp_palette[:]);
+        }
+        return optional.init(init_chunk(u32be(4 * palette_size), PLTE_TYPE, PLTE_Data{palette[:]}, crc));
+    }
     return init_chunk(0, PLTE_TYPE, optional.init(PLTE), 0);
 }
 
@@ -349,6 +355,7 @@ init_IDAT :: proc(data: ^IDAT, data_to_compress: []image.BGR($PixelDataT)) {
     compressed_data: []u8 = compress(data_to_compress);
     defer delete(compressed_data);
     if len(compressed_data) > IDAT_DATA_BLOCK_COMPRESSED_DATA_MAX_SIZE {
+        assert(false, "this still does not work!");
         num_blocks := (len(compressed_data) + IDAT_DATA_BLOCK_COMPRESSED_DATA_MAX_SIZE - 1) / IDAT_DATA_BLOCK_COMPRESSED_DATA_MAX_SIZE;
         data.compressed_blocks = make([]IDAT_DataBlock, num_blocks);
 
@@ -366,8 +373,8 @@ init_IDAT :: proc(data: ^IDAT, data_to_compress: []image.BGR($PixelDataT)) {
         data.compressed_blocks = make([]IDAT_DataBlock, 1); 
         data.compressed_blocks[0].length = u16(len(compressed_data));
         data.compressed_blocks[0].compressed_data = make([]u8, len(compressed_data));
-        copy(data.compressed_blocks[0].compressed_data, compressed_data);
-        // log.errorf("%v", data.compressed_blocks[0].compressed_data);
+        mem.copy(raw_data(data.compressed_blocks[0].compressed_data), raw_data(compressed_data), len(compressed_data));
+        log.errorf("%v", data.compressed_blocks[0].compressed_data);
         data.compressed_blocks[0].zlib_header = ZLIBHDR_DEFAULT;
         data.compressed_blocks[0].adler = 0;
     }
@@ -479,16 +486,12 @@ png_write_bgr8  :: proc(using img: ^image.ImageBGR8, file_path: string) {
             delete(new_file_path);
         }
     }
-    defer os.close(handle);
 
     if ok != os.ERROR_NONE {
-        // log.errorf("%v", ok);
         assert(false, "Failed to open file [png] for writing");
     }
     
-    _png_write(&png, os.stream_from_handle(handle));
-    
-    // log.infof("[PNG-WRITE-END]");
+    _png_write(&png, 256, os.stream_from_handle(handle));
 }
 
 png_write_bgr16 :: proc(using img: ^image.ImageBGR16, file_path: string) {
@@ -499,12 +502,25 @@ png_write_bgr32 :: proc(using img: ^image.ImageBGR32, file_path: string) {
 }
 
 @(private="file")
-_png_write :: #force_inline proc(using schema: ^PNG_Schema, writer: io.Writer) {
+_png_write :: #force_inline proc(using schema: ^PNG_Schema, $palette_size: int, writer: io.Writer) {
     png_write_header(writer);
+    log.info("HEADER");
     png_write_chunk(&header, writer);
+    log.info("HEADER CHUNK");
     // png_write_chunk(optional.get(&palette), writer);
+    {
+        _palette := optional.get(&palette);
+        data := [4 * palette_size]u8{};
+        mem.copy(raw_data(data[:]), raw_data(_palette.data.entries), 4 * palette_size);
+        log.infof("%v", data);
+        utils.write_file_safe(writer, data[:]);
+    }
+    log.info("PLTE CHUNK");
     png_write_chunk(&data, writer);
+    log.info("DATA CHUNK");
     png_write_chunk(&end, writer);
+    log.info("END CHUNK");
+    io.close(writer);
 }
 
 PNG_HEADER :: []u8 {
@@ -536,12 +552,19 @@ png_write_header_chunk_data  :: #force_inline proc(writer: io.Writer, header: ^I
     utils.write_file_safe(writer, { header^.bit_depth, header^.color_type, header^.m_compression, header^.m_filter, header^.m_interlace });
 }
 
+@(disabled=true)
 png_write_palette_chunk_data :: proc(writer: io.Writer, palette: ^PLTE_Data) {
-    entries: []u8 = make([]u8, len(palette^.entries) * len(PNG_PaletteEntry));
-    defer delete(entries);
-    mem.copy(raw_data(entries), raw_data(palette^.entries), len(entries));
-    // log.warnf("MAKE SURE THAT THIS COPY IS SUCCESSFULL");
-    utils.write_file_safe(writer, entries);
+    data: []u8 = make([]u8, 4 * len(palette^.entries));
+    defer delete(data);
+    // mem.copy(raw_data(data), raw_data(palette^.entries), 4 * len(palette^.entries));
+    for i in 0..<len(palette.entries) {
+        data[i * 4 + 0] = palette.entries[i][0];
+        data[i * 4 + 1] = palette.entries[i][1];
+        data[i * 4 + 2] = palette.entries[i][2];
+        data[i * 4 + 3] = palette.entries[i][3];
+    }
+    log.infof("%v", data);
+    utils.write_file_safe(writer, data[:]);
 }
 
 png_write_data_chunk_data    :: proc(writer: io.Writer, data: ^IDAT_Data) {
