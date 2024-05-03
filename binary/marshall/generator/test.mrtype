@@ -1,0 +1,21 @@
+StructIndexed1 :: struct {
+    value: i8,
+}
+
+StructIndexed2 :: struct {
+    value1: i16,
+    value2: StructIndexed1,
+}
+
+StructIndexed3 :: struct {
+    value1: i32,
+    value2: StructIndexed1,
+    value3: StructIndexed2,
+}
+
+MyCustomStruct :: struct {
+    value_: string[10],
+    value1: StructIndexed1,
+    value2: StructIndexed2,
+    value3: StructIndexed3,
+}
