@@ -11,8 +11,8 @@ PixelData16 :: PixelData(u16, i16);
 PixelData32 :: PixelData(u32, i32);
 
 /* BGRX PIXEL (FOR CONVENIENCE THE BGR IS PADDED BY THE 'X') */
-BGR :: struct($PixelDataT: typeid) #packed {
-    b, g, r, x: PixelDataT,
+BGR :: struct($PixelDataT: typeid) #align(4) {
+    b, g, r: PixelDataT,
 }
 
 BGR8  :: BGR(PixelData8);

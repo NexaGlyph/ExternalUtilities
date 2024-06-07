@@ -9,7 +9,6 @@ generate_random_pixel_data_ubgr :: #force_inline proc($PixelDataT: typeid/PixelD
         b = PixelDataT { data = cast(U)(rand.float32() * (1 << (size_of(U) * 8)) - 1) },
         g = PixelDataT { data = cast(U)(rand.float32() * (1 << (size_of(U) * 8)) - 1) },
         r = PixelDataT { data = cast(U)(rand.float32() * (1 << (size_of(U) * 8)) - 1) },
-        x = PixelDataT { data = cast(U)(0) },
     };
 }
 
@@ -18,7 +17,6 @@ generate_random_pixel_data_sbgr :: #force_inline proc($PixelDataT: typeid/PixelD
         b = PixelDataT { data_s = cast(S)(rand.float32() * (1 << size_of(S) - 1)) },
         g = PixelDataT { data_s = cast(S)(rand.float32() * (1 << size_of(S) - 1)) },
         r = PixelDataT { data_s = cast(S)(rand.float32() * (1 << size_of(S) - 1)) },
-        x = PixelDataT { data_s = cast(S)(0) },
     }
 }
 
