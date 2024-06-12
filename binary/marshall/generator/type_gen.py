@@ -16,25 +16,12 @@ class Integer:
         return f"Integer({self._value})"
 
     def __add__(self, other):
-        if isinstance(other, CustomInteger):
-            return CustomInteger(self._value + other._value)
+        if isinstance(other, Integer):
+            return Integer(self._value + other._value)
         return self._value + other
 
     def __iadd__(self, other):
         self._value += other
-        return self
-
-
-class Int8(Integer):
-    def __init__(self, value=0):
-        super().__init__(value)
-        self._max_value = 2**8 - 1
-
-    def __repr__(self):
-        return f"Int8({self._value})"
-
-    def __iadd__(self, other):
-        self._value = (self._value + other) % (self._max_value + 1)
         return self
 
 
@@ -49,6 +36,12 @@ class UInt16(Integer):
 
 @dataclass
 class MappingVariableProperty:
+
+    if DEBUG:
+
+        def __str__(self) -> str:
+            return str(self.value)
+
     value: "MappingVariableArbitrary"
 
 
@@ -60,6 +53,11 @@ class MappingVariableArbitrary:
         if DEBUG:
             self.name = name
         self.next = next
+
+    if DEBUG:
+
+        def __str__(self) -> str:
+            return f"{self.name} :: {self.index} // {"\t" + "".join([str(next) for next in self.next]) if self.next != [] else ""}"
 
     index: UInt16
     if DEBUG:
@@ -188,6 +186,9 @@ def create_mapping(structs: list[Struct], target: Struct) -> MappingFile:
     def variable_scan(member: StructMember) -> MappingVariableProperty:
         # this will ALWAYS be defined
         sizes.append(member.primitive.size)  # type: ignore[union-attr]
+        nonlocal sizes_index
+        sizes_index += 1
+        print(f"EACH STRUCT MEMBER HAS A NAME: {member.name}")
         return MappingVariableProperty(
             MappingVariableArbitrary(UInt16(sizes_index), [], member.name)
         )
@@ -218,12 +219,13 @@ def create_mapping(structs: list[Struct], target: Struct) -> MappingFile:
             properties.append(
                 MappingVariableProperty(
                     MappingVariableArbitrary(
-                        UInt16(len(sizes) - 1),
+                        UInt16(sizes_index),
                         [],
                         member.name,
                     )
                 )
             )
+            sizes_index += 1
         else:
             for struct in structs:
                 if struct.name == member.type:
@@ -246,13 +248,21 @@ def open_program_in_use_type_file() -> None:
         return file_path + ".mrtype"
 
     def write_file_mapping(mapping: MappingFile, file_path: str) -> None:
-        with open(file_path + ".mrmap", "wb+") as file:
+        with open(file_path + ".mrmap", "w+") as file:
             # write SIZES
-            file.write(
-                pack(f"<H{len(mapping.sizes)}B", len(mapping.sizes), *mapping.sizes)
-            )
+            # file.write(
+            #     pack(f"<H{len(mapping.sizes)}B", len(mapping.sizes), *mapping.sizes)
+            # )
             # write PROPERTIES
-            file.write(pack(f""))
+            # file.write(
+            #     pack(
+            #         f"<H{len(mapping.sizes)}B",
+            #     )
+            # )
+            file.write(",".join([str(size) for size in mapping.sizes]))
+            file.write("\n")
+            for property in mapping.properties:
+                file.write(str(property) + "\n")
 
     file_path: str = input("Name of the file with the 'program-in-use' type: ")
     with open(

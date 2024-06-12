@@ -15,7 +15,7 @@ when ODIN_DEBUG {
         if (res == S_OK) do return;
         switch res {
             case E_INVALID_PARAM:
-                log.errorf("ERROR: INVALID PARAM!", {}, location);
+                log.errorf("ERROR: INVALID PARAM!\n%s", location);
                 break;
             case:
                 log.errorf("%v %v", res, location);
@@ -27,7 +27,7 @@ when ODIN_DEBUG {
         if (res == S_FALSE) do return;
         switch res {
             case E_INVALID_PARAM:
-                log.errorf("ERROR: INVALID PARAM!", {}, location);
+                log.errorf("ERROR: INVALID PARAM!\n%s", location);
                 break;
             case:
                 log.errorf("%v", res, location);

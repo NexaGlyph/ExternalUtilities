@@ -32,8 +32,11 @@ redirect_debug_output_file :: proc(info_queue: ^D3D11.IInfoQueue, filepath: stri
         info_queue->GetMessage(i, nil, &message_len);
         fmt.printf("\x1b[32m%v", message_len);
 
-        message := cast(^D3D11.MESSAGE)mem.alloc(auto_cast message_len);
-        defer free(message);
+        message: ^D3D11.MESSAGE;
+        message_data, err := mem.alloc(auto_cast message_len);
+        if err != .None do assert(false);
+        message = cast(^D3D11.MESSAGE)message_data;
+        defer free(message_data);
 
         info_queue->GetMessage(i, message, nil);
 

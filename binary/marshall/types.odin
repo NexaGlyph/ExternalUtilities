@@ -1,10 +1,54 @@
 package marshall
 
-/* THESE TYPES SHOULD DENOTE THAT THEY ARE GOING TO BE SERIALIZED */
-marsh_i32 :: distinct i32;
-marsh_i16 :: distinct i16;
-marsh_i8  :: distinct i8;
+/* MAPPING */
+VariableSizeIndex :: distinct u16;
+MappingIndexNext  :: ~VariableSizeIndex(0); 
+VariableSize      :: u16;
 
-marsh_u32 :: distinct u32;
-marsh_u16 :: distinct u16;
-marsh_u8  :: distinct u8;
+MappingVariable :: struct {
+    sizes: []VariableSize,
+    properties: []MappingVariableProperty,
+}
+MappingVariableProperty :: struct {
+    value: MappingVariableArbitrary,
+}
+when ODIN_DEBUG {
+    MappingVariableArbitrary :: struct {
+        index: VariableSizeIndex,
+        name: string,
+        next: []MappingVariableProperty,
+    }
+}
+else {
+    MappingVariableArbitrary :: struct {
+        index: VariableSizeIndex,
+        next: []MappingVariableProperty,
+    }
+}
+
+/* SERIALIZED TYPE */
+MarshallIndex :: struct {
+    index: u32,
+    size: u16,
+}
+MarshallVariable :: struct($T: typeid) {
+    type: typeid,
+    byte_map: []byte,
+    properties: []MarshallVariableProperty,
+}
+MarshallVariableProperty :: struct {
+    value: ^MarshallVariableArbitrary,
+}
+when ODIN_DEBUG {
+    MarshallVariableArbitrary :: struct {
+        index: MarshallIndex,
+        name: string,
+        next: ^MarshallVariableArbitrary,
+    }
+}
+else {
+    MarshallVariableArbitrary :: struct {
+        value: MarshallIndex,
+        next: ^MarshallVariableArbitrary,
+    }
+}

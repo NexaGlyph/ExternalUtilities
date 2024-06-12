@@ -382,80 +382,80 @@ RENDERDOC_Version :: enum {
 }
 
 RENDERDOC_API_1_6_0 :: struct {
-  GetAPIVersion: pRENDERDOC_GetAPIVersion
+  GetAPIVersion: pRENDERDOC_GetAPIVersion,
 
-  SetCaptureOptionU32: pRENDERDOC_SetCaptureOptionU32
-  SetCaptureOptionF32: pRENDERDOC_SetCaptureOptionF32
+  SetCaptureOptionU32: pRENDERDOC_SetCaptureOptionU32,
+  SetCaptureOptionF32: pRENDERDOC_SetCaptureOptionF32,
 
-  GetCaptureOptionU32: pRENDERDOC_GetCaptureOptionU32
-  GetCaptureOptionF32: pRENDERDOC_GetCaptureOptionF32
+  GetCaptureOptionU32: pRENDERDOC_GetCaptureOptionU32,
+  GetCaptureOptionF32: pRENDERDOC_GetCaptureOptionF32,
 
-  SetFocusToggleKeys: pRENDERDOC_SetFocusToggleKeys
-  SetCaptureKeys: pRENDERDOC_SetCaptureKeys
+  SetFocusToggleKeys: pRENDERDOC_SetFocusToggleKeys,
+  SetCaptureKeys: pRENDERDOC_SetCaptureKeys,
 
-  GetOverlayBits: pRENDERDOC_GetOverlayBits
-  MaskOverlayBits: pRENDERDOC_MaskOverlayBits
+  GetOverlayBits: pRENDERDOC_GetOverlayBits,
+  MaskOverlayBits: pRENDERDOC_MaskOverlayBits,
 
   // Shutdown was renamed to RemoveHooks in 1.4.1.
   // These unions allow old code to continue compiling without changes
   using x : struct #raw_union
   {
-    Shutdown: pRENDERDOC_Shutdown
-    RemoveHooks: pRENDERDOC_RemoveHooks
-  }
-  UnloadCrashHandler: pRENDERDOC_UnloadCrashHandler
+    Shutdown: pRENDERDOC_Shutdown,
+    RemoveHooks: pRENDERDOC_RemoveHooks,
+  },
+  UnloadCrashHandler: pRENDERDOC_UnloadCrashHandler,
 
   // Get/SetLogFilePathTemplate was renamed to Get/SetCaptureFilePathTemplate in 1.1.2.
   // These unions allow old code to continue compiling without changes
   using y : struct #raw_union
   {
     // deprecated name
-    SetLogFilePathTemplate: pRENDERDOC_SetLogFilePathTemplate
+    SetLogFilePathTemplate: pRENDERDOC_SetLogFilePathTemplate,
     // current name
-    SetCaptureFilePathTemplate: pRENDERDOC_SetCaptureFilePathTemplate
-  }
+    SetCaptureFilePathTemplate: pRENDERDOC_SetCaptureFilePathTemplate,
+  },
 
   using z : struct #raw_union
   {
     // deprecated name
-    GetLogFilePathTemplate: pRENDERDOC_GetLogFilePathTemplate
+    GetLogFilePathTemplate: pRENDERDOC_GetLogFilePathTemplate,
     // current name
-    GetCaptureFilePathTemplate: pRENDERDOC_GetCaptureFilePathTemplate
-  }
+    GetCaptureFilePathTemplate: pRENDERDOC_GetCaptureFilePathTemplate,
+  },
 
-  GetNumCaptures: pRENDERDOC_GetNumCaptures
-  GetCapture: pRENDERDOC_GetCapture
+  GetNumCaptures: pRENDERDOC_GetNumCaptures,
+  GetCapture: pRENDERDOC_GetCapture,
 
-  TriggerCapture: pRENDERDOC_TriggerCapture
+  TriggerCapture: pRENDERDOC_TriggerCapture,
 
   // IsRemoteAccessConnected was renamed to IsTargetControlConnected in 1.1.1.
   // This union allows old code to continue compiling without changes
   using w : struct #raw_union
   {
     // deprecated name
-    IsRemoteAccessConnected: pRENDERDOC_IsRemoteAccessConnected
+    IsRemoteAccessConnected: pRENDERDOC_IsRemoteAccessConnected,
     // current name
-    IsTargetControlConnected: pRENDERDOC_IsTargetControlConnected
-  }
+    IsTargetControlConnected: pRENDERDOC_IsTargetControlConnected,
+  },
 
-  LaunchReplayUI: pRENDERDOC_LaunchReplayUI
+  LaunchReplayUI: pRENDERDOC_LaunchReplayUI,
 
-  SetActiveWindow: pRENDERDOC_SetActiveWindow
+  SetActiveWindow: pRENDERDOC_SetActiveWindow,
 
-  StartFrameCapture: pRENDERDOC_StartFrameCapture
-  IsFrameCapturing: pRENDERDOC_IsFrameCapturing
-  EndFrameCapture: pRENDERDOC_EndFrameCapture
+  StartFrameCapture: pRENDERDOC_StartFrameCapture,
+  IsFrameCapturing: pRENDERDOC_IsFrameCapturing,
+  EndFrameCapture: pRENDERDOC_EndFrameCapture,
 
   // new function in 1.1.0
-  TriggerMultiFrameCapture: pRENDERDOC_TriggerMultiFrameCapture
+  TriggerMultiFrameCapture: pRENDERDOC_TriggerMultiFrameCapture,
   // new function in 1.2.0
-  SetCaptureFileComments: pRENDERDOC_SetCaptureFileComments
+  SetCaptureFileComments: pRENDERDOC_SetCaptureFileComments,
   // new function in 1.4.0
-  DiscardFrameCapture: pRENDERDOC_DiscardFrameCapture
+  DiscardFrameCapture: pRENDERDOC_DiscardFrameCapture,
   // new function in 1.5.0
-  ShowReplayUI: pRENDERDOC_ShowReplayUI
+  ShowReplayUI: pRENDERDOC_ShowReplayUI,
   // new function in 1.6.0
-  SetCaptureTitle: pRENDERDOC_SetCaptureTitle
+  SetCaptureTitle: pRENDERDOC_SetCaptureTitle,
 }
 
 RENDERDOC_API_1_0_0 :: RENDERDOC_API_1_6_0;
