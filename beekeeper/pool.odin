@@ -20,6 +20,7 @@ BKPR_Pool :: struct($RESOURCE: typeid)
     where intrinsics.type_is_variant_of(BKPR_Resource, RESOURCE) 
 {
     memory: []BKPR_PoolObject(RESOURCE),
+    active_id: BKPR_PoolObjectID,
     unused: ^BKPR_PoolObject(RESOURCE),
 }
 
@@ -36,6 +37,7 @@ init_bkpr_pool :: #force_inline proc(pool: ^BKPR_Pool($RESOURCE), allocator: ^BK
     );
     assert(len(pool^.memory) > 0, "Pool allocation memory failed!");
     pool^.unused = &pool^.memory[0];
+    pool^.active_id = 1;
 }
 
 /**
@@ -43,8 +45,15 @@ init_bkpr_pool :: #force_inline proc(pool: ^BKPR_Pool($RESOURCE), allocator: ^BK
  */
 @(require_results)
 next :: proc(pool: ^BKPR_Pool($RESOURCE)) -> (res: ^RESOURCE) {
-    assert(pool^.unused.id == BKPR_PoolObject_Uninitialized, "Out of memory!");
+    if pool^.unused == nil {
+        fmt.println("Out of memory!");
+        return nil; // out of memory
+    }
     res = &pool^.unused^.resource;
+
+    pool^.unused^.id += pool^.active_id; // TODO: make this unique to each pool!
+    pool^.active_id += 1;
+
     _ = seek_unused(pool); // 'false' returned will not be of any use until next 'next()' call
     return;
 }

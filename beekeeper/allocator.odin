@@ -61,7 +61,7 @@ bkpr_allocator_proc :: proc(allocator_data: rawptr, mode: BKPR_AllocatorMode,
                 fmt.printf("Failed to Allocate memory: BKPR_Allocator out of memory!\nRequested size: %v\nCaller location: %v\n", size, location);
                 return nil, BKPR_AllocatorError.Out_Of_Memory;
             }
-            slice := bkpr_alloc^.data[bkpr_alloc^.used:size];
+            slice := bkpr_alloc^.data[bkpr_alloc^.used:bkpr_alloc^.used + cast(u32)size];
             bkpr_alloc^.used += cast(u32)size;
             fmt.printf("BKPR_Allocator returning memory block of size: %v!\nCaller location: %v\n", size, location);
             return slice, nil;
