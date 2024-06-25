@@ -56,6 +56,7 @@ init_shared :: #force_inline proc "contextless" (resource: $RESOURCE) -> BKPR_Po
 
 /**
  * @brief this function is going to be called when user makes explicit copy of BKPR_PointerShared
+ * @note this "copy" means shallow copy NOT deep copy... (there is not need for creation of BKPR_PointerShared in first place if you just want to copy...)
  */
 @(private)
 copy_shared :: #force_inline proc "contextless" (ptr: BKPR_PointerShared($RESOURCE)) -> BKPR_PointerShared(RESOURCE) {
