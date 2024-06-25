@@ -1,18 +1,36 @@
 //+build windows
 package bkpr
 
+import "base:intrinsics"
+
+import "core:fmt"
+
 BKPR_TexturePool  :: BKPR_Pool(BKPR_Texture);
 BKPR_TextPool     :: BKPR_Pool(BKPR_Text);
 BKPR_PolygonPool  :: BKPR_Pool(BKPR_Polygon);
 BKPR_LinePool     :: BKPR_Pool(BKPR_Line);
 BKPR_ParticlePool :: BKPR_Pool(BKPR_Particle);
 
-POOL_SIZES := map[InitFlags]int {
-    {.Texture}  = 100 * size_of(BKPR_PoolObject(BKPR_Texture))  * align_of(BKPR_PoolObject(BKPR_Texture)),
-    {.Text}     = 50  * size_of(BKPR_PoolObject(BKPR_Text))     * align_of(BKPR_PoolObject(BKPR_Text)),
-    {.Polygon}  = 200 * size_of(BKPR_PoolObject(BKPR_Polygon))  * align_of(BKPR_PoolObject(BKPR_Polygon)),
-    {.Line}     = 10  * size_of(BKPR_PoolObject(BKPR_Line))     * align_of(BKPR_PoolObject(BKPR_Line)),
-    {.Particle} = 400 * size_of(BKPR_PoolObject(BKPR_Particle)) * align_of(BKPR_PoolObject(BKPR_Particle)),
+BKPR_PoolSizeDescription :: struct {
+    len: int,
+    byte_size: int,
+    alignment: int,
+}
+POOL_SIZE_DESCRIPTION :: #force_inline proc(num_elements: int, $T: typeid/BKPR_PoolObject($RESOURCE)) -> BKPR_PoolSizeDescription 
+    where intrinsics.type_is_variant_of(BKPR_Resource, RESOURCE) 
+{
+    return BKPR_PoolSizeDescription {
+        len = num_elements,
+        byte_size = size_of(T),
+        alignment = align_of(T),
+    };
+}
+POOL_SIZES := map[InitFlags]BKPR_PoolSizeDescription {
+    {.Texture}  = { 100, size_of(BKPR_PoolObject(BKPR_Texture)) , align_of(BKPR_PoolObject(BKPR_Texture))  },
+    {.Text}     = { 50 , size_of(BKPR_PoolObject(BKPR_Text))    , align_of(BKPR_PoolObject(BKPR_Text))     },
+    {.Polygon}  = { 200, size_of(BKPR_PoolObject(BKPR_Polygon)) , align_of(BKPR_PoolObject(BKPR_Polygon))  },
+    {.Line}     = { 10 , size_of(BKPR_PoolObject(BKPR_Line))    , align_of(BKPR_PoolObject(BKPR_Line))     },
+    {.Particle} = { 400, size_of(BKPR_PoolObject(BKPR_Particle)), align_of(BKPR_PoolObject(BKPR_Particle)) },
 };
 
 /* Custom Pool functions */
@@ -39,23 +57,24 @@ POOL_SIZES := map[InitFlags]int {
 @(private)
 _init_bkpr_imm_texture :: proc(resource: ^BKPR_Texture, texture_desc: BKPR_TextureDesc) -> BKPR_ImmTexture {
     return BKPR_ImmTexture {
-        mem = resource,
+        resource_ref = resource,
         type = .Immutable,
         vtable = BKPR_ImmTextureVTABLE{
-            base = {
-                address = address_texture,
-                address_of = address_of_texture,
-                dump = dump_texture,
-            },
+            dump = vtable_dump_imm_texture,
+            address = vtable_address_imm_texture,
         },
     };
 }
 @(private)
 _init_bkpr_unq_texture :: proc(resource: ^BKPR_Texture, texture_desc: BKPR_TextureDesc) -> BKPR_UnqTexture {
     return BKPR_UnqTexture {
-        mem    = resource,
+        resource_ref    = resource,
         type   = .Unique,
-        vtable = BKPR_UnqTextureVTABLE{},
+        vtable = BKPR_UnqTextureVTABLE{
+            dump = vtable_dump_unq_texture,
+            address = vtable_address_unq_texture,
+            update = vtable_unique_update_texture,
+        },
     };
 }
 
@@ -78,23 +97,37 @@ init_bkpr_unq_texture :: #force_inline proc(manager: ^BKPR_Manager, texture_desc
     }
     else do return _init_bkpr_unq_texture(res_ptr, texture_desc);
 }
+
+dump_bkpr_texture_resource :: #force_inline proc(texture_pool: ^BKPR_TexturePool, imm_texture: ^BKPR_Pointer($a, $b)) {
+    fmt.println("Release texture resource with id: %v", query_id(texture_pool, imm_texture^));
+    delete_from_bkpr_pool_by_ptr(texture_pool, imm_texture);
+}
 /*! TEXTURE */
 
 /* TEXT */
 @(private)
 _init_bkpr_imm_text :: proc(resource: ^BKPR_Text, text_desc: BKPR_TextDesc) -> BKPR_ImmText {
+    resource^.dummy_text = string(text_desc.dummy_text_buffer);
     return BKPR_ImmText {
-        mem    = resource,
+        resource_ref = resource,
         type   = .Immutable,
-        vtable = BKPR_ImmTextVTABLE{},
+        vtable = BKPR_ImmTextVTABLE{
+            dump = vtable_dump_imm_text,
+            address = vtable_address_imm_text,
+        },
     };
 }
 @(private)
 _init_bkpr_unq_text :: proc(resource: ^BKPR_Text, text_desc: BKPR_TextDesc) -> BKPR_UnqText {
+    resource^.dummy_text = string(text_desc.dummy_text_buffer);
     return BKPR_UnqText {
-        mem    = resource,
+        resource_ref = resource,
         type   = .Unique,
-        vtable = BKPR_UnqTextVTABLE{},
+        vtable = BKPR_UnqTextVTABLE{
+            dump = vtable_dump_unq_text,
+            address = vtable_address_unq_text,
+            update = vtable_unique_update_text,
+        },
     };
 }
 
@@ -117,13 +150,18 @@ init_bkpr_unq_text :: #force_inline proc(manager: ^BKPR_Manager, text_desc: BKPR
     }
     else do return _init_bkpr_unq_text(res_ptr, text_desc);
 }
+
+dump_bkpr_text_resource :: #force_inline proc(text_pool: ^BKPR_TextPool, imm_text: ^BKPR_Pointer($a, $b)) {
+    fmt.println("Release text resource with id: %v", query_id(text_pool, imm_text^));
+    delete_from_bkpr_pool_by_ptr(text_pool, imm_text);
+}
 /*! TEXT */
 
 /* POLYGON */
 @(private)
 _init_bkpr_imm_polygon :: proc(resource: ^BKPR_Polygon, polygon_desc: BKPR_PolygonDesc) -> BKPR_ImmPolygon {
     return BKPR_ImmPolygon {
-        mem    = resource,
+        resource_ref    = resource,
         type   = .Immutable,
         vtable = BKPR_ImmPolygonVTABLE{},
     };
@@ -131,11 +169,12 @@ _init_bkpr_imm_polygon :: proc(resource: ^BKPR_Polygon, polygon_desc: BKPR_Polyg
 @(private)
 _init_bkpr_unq_polygon :: proc(resource: ^BKPR_Polygon, polygon_desc: BKPR_PolygonDesc) -> BKPR_UnqPolygon {
     return BKPR_UnqPolygon {
-        mem    = resource,
+        resource_ref    = resource,
         type   = .Unique,
         vtable = BKPR_UnqPolygonVTABLE{},
     };
 }
+
 init_bkpr_imm_polygon :: #force_inline proc(manager: ^BKPR_Manager, polygon_desc: BKPR_PolygonDesc, location := #caller_location) -> Maybe(BKPR_ImmPolygon) {
     res_ptr := next(&manager^.polygon_pool);
     if res_ptr == nil do return nil;
@@ -155,13 +194,18 @@ init_bkpr_unq_polygon :: #force_inline proc(manager: ^BKPR_Manager, polygon_desc
     }
     else do return _init_bkpr_unq_polygon(res_ptr, polygon_desc);
 }
+
+dump_bkpr_polygon_resource :: #force_inline proc(polygon_pool: ^BKPR_PolygonPool, imm_polygon: ^BKPR_Pointer($a, $b)) {
+    fmt.println("Release polygon resource with id: %v", query_id(polygon_pool, imm_polygon^));
+    delete_from_bkpr_pool_by_ptr(polygon_pool, imm_polygon);
+}
 /*! POLYGON */
 
 /* LINE */
 @(private)
 _init_bkpr_imm_line :: proc(resource: ^BKPR_Line, line_desc: BKPR_LineDesc) -> BKPR_ImmLine {
     return BKPR_ImmLine {
-        mem    = resource,
+        resource_ref    = resource,
         type   = .Immutable,
         vtable = BKPR_ImmLineVTABLE{},
     };
@@ -169,7 +213,7 @@ _init_bkpr_imm_line :: proc(resource: ^BKPR_Line, line_desc: BKPR_LineDesc) -> B
 @(private)
 _init_bkpr_unq_line :: proc(resource: ^BKPR_Line, line_desc: BKPR_LineDesc) -> BKPR_UnqLine {
     return BKPR_UnqLine {
-        mem    = resource,
+        resource_ref    = resource,
         type   = .Unique,
         vtable = BKPR_UnqLineVTABLE{},
     };
@@ -199,7 +243,7 @@ init_bkpr_unq_line :: #force_inline proc(manager: ^BKPR_Manager, line_desc: BKPR
 @(private)
 _init_bkpr_imm_particle :: proc(resource: ^BKPR_Particle, particle_desc: BKPR_ParticleDesc) -> BKPR_ImmParticle {
     return BKPR_ImmParticle {
-        mem    = resource,
+        resource_ref    = resource,
         type   = .Immutable,
         vtable = BKPR_ImmParticleVTABLE{},
     };
@@ -207,7 +251,7 @@ _init_bkpr_imm_particle :: proc(resource: ^BKPR_Particle, particle_desc: BKPR_Pa
 @(private)
 _init_bkpr_unq_particle :: proc(resource: ^BKPR_Particle, particle_desc: BKPR_ParticleDesc) -> BKPR_UnqParticle {
     return BKPR_UnqParticle {
-        mem    = resource,
+        resource_ref    = resource,
         type   = .Unique,
         vtable = BKPR_UnqParticleVTABLE{},
     };

@@ -32,7 +32,7 @@ main :: proc() {
     //>>>NOTE: TODO FIX THE ALLOCATION SIZE BEING TOO LARGE
 
     beekeeper := bkpr.BKPR_Manager {};
-    bkpr.init(&beekeeper, {.Texture, .Polygon, .Particle});
+    bkpr.init(&beekeeper, {.Reserved, .Texture, .Particle, .Polygon});
 
     // initialize texture
     bkpr.begin_track(&beekeeper.allocator.tracker);
@@ -104,7 +104,7 @@ main :: proc() {
     fmt.println("---------------------------------------------");
     bkpr.block_check_auto(&beekeeper.allocator.tracker);
 
-    bkpr.dump(&beekeeper, {.All});
+    bkpr.dump(&beekeeper);
 
 }
 

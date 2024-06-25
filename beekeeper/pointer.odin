@@ -3,8 +3,6 @@ package bkpr
 
 import "base:intrinsics"
 
-import "core:fmt"
-
 BKPR_PointerType :: enum u8 {
     Immutable = 0,
     Unique = 1,
@@ -12,46 +10,85 @@ BKPR_PointerType :: enum u8 {
 }
 
 BKPR_Pointer :: struct($MEMORY: typeid, $VTABLE: typeid)
-    where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY) /*&& intrinsics.type_is_subtype_of(BKPR_PointerBaseVTABLE(MEMORY), VTABLE)*/
+    where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
 {
-    mem: ^MEMORY,
+    resource_ref: ^MEMORY,
     type: BKPR_PointerType,
     using vtable: VTABLE,
 }
 
-BKPR_PointerBaseVTABLE :: struct($MEMORY: typeid) 
+BKPR_PointerImmutable :: struct($MEMORY: typeid) 
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
 {
-    address:        proc (this: ^BKPR_Pointer(MEMORY, BKPR_PointerBaseVTABLE(MEMORY))) -> ^MEMORY,
-    address_of:     proc (this: ^BKPR_Pointer(MEMORY, BKPR_PointerBaseVTABLE(MEMORY))) -> ^^MEMORY,
-    dump:           proc (this: ^BKPR_Pointer(MEMORY, BKPR_PointerBaseVTABLE(MEMORY))),
+    using _: BKPR_Pointer(MEMORY, BKPR_PointerImmutableVTABLE(MEMORY)),
 }
+// since we cannot really make a "typed" type alias, we will create a blank structure for convenience of abstracting few lines of "typed" programming
+// size preserved, hence the check
+#assert(
+    size_of(BKPR_PointerImmutable(BKPR_Texture)) == size_of(
+        BKPR_Pointer(BKPR_Texture, BKPR_PointerImmutableVTABLE(BKPR_Texture))
+    )
+);
+
+BKPR_PointerUnique :: struct($MEMORY: typeid) 
+    where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
+{
+    using _: BKPR_Pointer(MEMORY, BKPR_PointerUniqueVTABLE(MEMORY)),
+}
+#assert(
+    size_of(BKPR_PointerUnique(BKPR_Texture)) == size_of(
+        BKPR_Pointer(BKPR_Texture, BKPR_PointerUniqueVTABLE(BKPR_Texture))
+    )
+);
+
+/**
+ @note PointerShared's resource cannot be operated on ad extra
+ */
+BKPR_PointerShared :: struct($MEMORY: typeid) 
+    where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
+{
+    control_block: ^BKPR_PointerSharedControlBlock(MEMORY),
+    type: BKPR_PointerType,
+    using vtable: BKPR_PointerSharedVTABLE(MEMORY),
+}
+#assert(
+    size_of(BKPR_PointerShared(BKPR_Texture)) == size_of(
+        BKPR_Pointer(BKPR_Texture, BKPR_PointerSharedVTABLE(BKPR_Texture))
+    )
+);
+
+/**
+ * @brief Immmutable pointers cannot be overriden nor copied, only accessed, 
+ */
 BKPR_PointerImmutableVTABLE :: struct($MEMORY: typeid) 
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
 {
-    #subtype base: BKPR_PointerBaseVTABLE(MEMORY),
+    dump:    proc(this: ^BKPR_PointerImmutable(MEMORY)),
+    address: proc(this: ^BKPR_PointerImmutable(MEMORY)) -> ^MEMORY,
 }
+
+/**
+ * @brief Unique pointers are capable of "overriding" or "updating" its underlying memory, for convenience and avoidance of further unions, the update_desc of the update method
+ * is going to be rawptr (this is not hapzard to the code structure since each BKPR_Resource's unique pointer implementation will deal with this in an cast to BKPR_ResourceDesc pointer)
+ */
 BKPR_PointerUniqueVTABLE :: struct($MEMORY: typeid) 
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
 {
-    #subtype base: BKPR_PointerBaseVTABLE(MEMORY),
-    update:        proc (this: ^BKPR_Pointer(MEMORY, BKPR_PointerUniqueVTABLE(MEMORY))),
-}
-BKPR_PointerSharedVTABLE :: struct($MEMORY: typeid)
-    where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
-{
-    #subtype base: BKPR_PointerBaseVTABLE(MEMORY),
-    make_shared:        proc (this: ^BKPR_Pointer(MEMORY, BKPR_PointerUniqueVTABLE(MEMORY))) -> ^MEMORY,
+    dump:          proc(this: ^BKPR_PointerUnique(MEMORY)),
+    address:       proc(this: ^BKPR_PointerUnique(MEMORY)) -> ^MEMORY,
+
+    update:        proc(this: ^BKPR_PointerUnique(MEMORY), update_desc: rawptr),
 }
 
-address_texture :: proc(this: ^BKPR_Pointer(BKPR_Texture, BKPR_PointerBaseVTABLE(BKPR_Texture))) -> ^BKPR_Texture {
-    fmt.println("Returning texture address!");
-    return nil;
-}
-address_of_texture :: proc(this: ^BKPR_Pointer(BKPR_Texture, BKPR_PointerBaseVTABLE(BKPR_Texture))) -> ^^BKPR_Texture {
-    fmt.println("Returning pointer to texture address!");
-    return nil;
-}
-dump_texture :: proc(this: ^BKPR_Pointer(BKPR_Texture, BKPR_PointerBaseVTABLE(BKPR_Texture))) {
-    fmt.println("Dumping texture!");
+/**
+ * @brief Shared pointer have the abilities of the unqiue pointers but also can be "copied" (TODO!)
+ */
+BKPR_PointerSharedVTABLE :: struct($MEMORY: typeid) 
+    where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
+{
+    dump:          proc(this: ^BKPR_PointerShared(MEMORY)),
+    address:       proc(this: ^BKPR_PointerShared(MEMORY)) -> ^MEMORY,
+
+    update:        proc(this: ^BKPR_PointerShared(MEMORY), update_desc: rawptr),
+    make_shared:   proc(this: ^BKPR_PointerShared(MEMORY)) -> ^MEMORY,
 }

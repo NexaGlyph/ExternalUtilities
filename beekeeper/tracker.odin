@@ -21,14 +21,14 @@ BKPR_AllocatorTracker :: struct #no_copy {
     track_indent: BKPR_AllocatorTrackerID,
 }
 
-init_bkpr_tracker :: #force_inline proc() -> BKPR_AllocatorTracker {
-    return { make(BKPR_AllocatorTrack), 0, 0 };
+init_bkpr_tracker :: #force_inline proc(source_allocator: runtime.Allocator) -> BKPR_AllocatorTracker {
+    return { make(BKPR_AllocatorTrack, allocator=source_allocator), 0, 0 };
 }
 
 track :: proc(tracker: ^BKPR_AllocatorTracker, ptr: ^BKPR_Pointer($MEMORY, $VTABLE), location := #caller_location) {
     tracker^.track[1 << (tracker^.track_indent + 8) | tracker^.tracking_id] = {
         location = location,
-        last_ref = ptr^.mem,
+        last_ref = ptr^.resource_ref,
     };
 
     tracker^.tracking_id += 1;
@@ -45,15 +45,17 @@ untrack_record :: proc {
 }
 
 @(private)
-untrack_record_manual :: #force_inline proc(tracker: ^BKPR_AllocatorTracker, record: ^[]BKPR_Pointer($MEMORY, $VTABLE))
+untrack_record_manual :: #force_inline proc(tracker: ^BKPR_AllocatorTracker, record: []BKPR_Pointer($MEMORY, $VTABLE))
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY) 
 {
-    for r in record do untrack(tracker, &r);
+    record := record;
+    for r in &record do untrack(tracker, &r);
 }
 
 @(private)
-untrack_record_deduct :: #force_inline proc(tracker: ^BKPR_AllocatorTracker, record: ^[]BKPR_AllocatorTrackerItemData) {
-    for r in record {
+untrack_record_deduct :: #force_inline proc(tracker: ^BKPR_AllocatorTracker, record: []BKPR_AllocatorTrackerItemData) {
+    record := record;
+    for r in &record {
         for key, val in tracker^.track {
             if val.last_ref == r.last_ref do delete_key(&tracker^.track, key);
         }
@@ -75,7 +77,7 @@ untrack :: #force_inline proc(tracker: ^BKPR_AllocatorTracker, ptr: ^BKPR_Pointe
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)    
 {
     for key, val in tracker^.track {
-        if val.last_ref == ptr^.mem {
+        if val.last_ref == ptr^.resource_ref {
             fmt.printf("\x1b[32m[Untracking] ---\n");
             fmt.printf("\x1b[0m%v\n", tracker^.track[key]);
             delete_key(&tracker^.track, key);
