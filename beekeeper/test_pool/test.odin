@@ -24,16 +24,16 @@ test2 :: proc(beekeeper: ^bkpr.BKPR_Manager) -> bool {
             imm_texture, ok := bkpr.init_bkpr_imm_texture(beekeeper, bkpr.BKPR_TextureDesc{}).?;
             if ok {
                 append(&imm_textures, imm_texture);
-                append(&imm_texture_ids, bkpr.query_id(&beekeeper^.texture_pool, imm_texture));
+                append(&imm_texture_ids, bkpr.query_id(&beekeeper^.texture_pool, imm_texture._base));
             }
         }
 
         // if a texture is deleted, the id of the instantly created one after that
         // will have the same id...
-        when bkpr.BKPR_DEBUG_TRACKER_ENABLED do bkpr.untrack(&beekeeper^.allocator.tracker, &imm_textures[len(imm_textures) - 1]);
-        bkpr.dump_bkpr_texture_resource(&beekeeper^.texture_pool, &imm_textures[len(imm_textures) - 1]);
+        when bkpr.BKPR_DEBUG_TRACKER_ENABLED do bkpr.untrack(&beekeeper^.allocator.tracker, &imm_textures[len(imm_textures) - 1]._base);
+        bkpr.dump_bkpr_texture_resource(&beekeeper^.texture_pool, &imm_textures[len(imm_textures) - 1]._base);
         imm_texture, ok := bkpr.init_bkpr_imm_texture(beekeeper, bkpr.BKPR_TextureDesc{}).?;
-        if id := bkpr.query_id(&beekeeper^.texture_pool, imm_texture); id > 0 {
+        if id := bkpr.query_id(&beekeeper^.texture_pool, imm_texture._base); id > 0 {
             if id != imm_texture_ids[len(imm_texture_ids) - 1] {
                 fmt.printf("%v :: %v\n", id, imm_texture_ids[len(imm_texture_ids) - 1])
                 return false;
@@ -62,12 +62,14 @@ test2 :: proc(beekeeper: ^bkpr.BKPR_Manager) -> bool {
         }
 
         imm_text, _ := bkpr.init_bkpr_imm_text(beekeeper, { text_buffer }).?;
-        when bkpr.BKPR_DEBUG_TRACKER_ENABLED do defer bkpr.untrack(&beekeeper^.allocator.tracker, &imm_text);
+        when bkpr.BKPR_DEBUG_TRACKER_ENABLED do defer bkpr.untrack(&beekeeper^.allocator.tracker, &imm_text._base);
+        defer bkpr.dump_bkpr_text_resource(&beekeeper^.text_pool, &imm_text._base);
         fmt.println("Display immutable text....\n");
         display_text_immutable(&imm_text);
 
         unq_text, _ := bkpr.init_bkpr_unq_text(beekeeper, { text_buffer }).?;
-        when bkpr.BKPR_DEBUG_TRACKER_ENABLED do defer bkpr.untrack(&beekeeper^.allocator.tracker, &unq_text);
+        when bkpr.BKPR_DEBUG_TRACKER_ENABLED do defer bkpr.untrack(&beekeeper^.allocator.tracker, &unq_text._base);
+        defer bkpr.dump_bkpr_text_resource(&beekeeper^.text_pool, &unq_text._base);
         fmt.println("Display unique text....\n");
         display_text_unique(&unq_text);
         fmt.println("Display unique text after update [SHOULD SEE 'NEW!']....\n");

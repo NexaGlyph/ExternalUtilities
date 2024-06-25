@@ -41,15 +41,15 @@ untrack_all :: #force_inline proc(tracker: ^BKPR_AllocatorTracker) {
 }
 
 untrack_record :: proc {
-    untrack_record_deduct, untrack_record_manual,
+    untrack_record_deduct, untrack_imm_record_manual,
 }
 
 @(private)
-untrack_record_manual :: #force_inline proc(tracker: ^BKPR_AllocatorTracker, record: []BKPR_Pointer($MEMORY, $VTABLE))
+untrack_imm_record_manual :: #force_inline proc(tracker: ^BKPR_AllocatorTracker, record: []BKPR_PointerImmutable($MEMORY))
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY) 
 {
     record := record;
-    for r in &record do untrack(tracker, &r);
+    for r in &record do untrack(tracker, &r._base);
 }
 
 @(private)

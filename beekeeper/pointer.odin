@@ -20,10 +20,12 @@ BKPR_Pointer :: struct($MEMORY: typeid, $VTABLE: typeid)
 BKPR_PointerImmutable :: struct($MEMORY: typeid) 
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
 {
-    using _: BKPR_Pointer(MEMORY, BKPR_PointerImmutableVTABLE(MEMORY)),
+    using _base: BKPR_Pointer(MEMORY, BKPR_PointerImmutableVTABLE(MEMORY)),
 }
 // since we cannot really make a "typed" type alias, we will create a blank structure for convenience of abstracting few lines of "typed" programming
 // size preserved, hence the check
+// the only inconvenience is that some OG functions do require a pointer of type BKPR_Pointer and not BKPR_Pointer###
+// (this can be changed, but would create unbelievable amount of unnecessary and redundant functions...)
 #assert(
     size_of(BKPR_PointerImmutable(BKPR_Texture)) == size_of(
         BKPR_Pointer(BKPR_Texture, BKPR_PointerImmutableVTABLE(BKPR_Texture))
@@ -33,7 +35,7 @@ BKPR_PointerImmutable :: struct($MEMORY: typeid)
 BKPR_PointerUnique :: struct($MEMORY: typeid) 
     where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
 {
-    using _: BKPR_Pointer(MEMORY, BKPR_PointerUniqueVTABLE(MEMORY)),
+    using _base: BKPR_Pointer(MEMORY, BKPR_PointerUniqueVTABLE(MEMORY)),
 }
 #assert(
     size_of(BKPR_PointerUnique(BKPR_Texture)) == size_of(

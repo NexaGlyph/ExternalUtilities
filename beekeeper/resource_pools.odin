@@ -83,7 +83,7 @@ init_bkpr_imm_texture :: #force_inline proc(manager: ^BKPR_Manager, texture_desc
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         imm_texture := _init_bkpr_imm_texture(res_ptr, texture_desc);
-        track(&manager^.allocator.tracker, &imm_texture, location);
+        track(&manager^.allocator.tracker, &imm_texture._base, location);
         return imm_texture;
     } else do return _init_bkpr_imm_texture(res_ptr, texture_desc);
 }
@@ -92,15 +92,15 @@ init_bkpr_unq_texture :: #force_inline proc(manager: ^BKPR_Manager, texture_desc
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         unq_texture := _init_bkpr_unq_texture(res_ptr, texture_desc);
-        track(&manager^.allocator.tracker, &unq_texture, location);
+        track(&manager^.allocator.tracker, &unq_texture._base, location);
         return unq_texture;
     }
     else do return _init_bkpr_unq_texture(res_ptr, texture_desc);
 }
 
-dump_bkpr_texture_resource :: #force_inline proc(texture_pool: ^BKPR_TexturePool, imm_texture: ^BKPR_Pointer($a, $b)) {
-    fmt.println("Release texture resource with id: %v", query_id(texture_pool, imm_texture^));
-    delete_from_bkpr_pool_by_ptr(texture_pool, imm_texture);
+dump_bkpr_texture_resource :: #force_inline proc(texture_pool: ^BKPR_TexturePool, texture: ^BKPR_Pointer($a, $b)) {
+    fmt.println("Release texture resource with id: %v", query_id(texture_pool, texture^));
+    delete_from_bkpr_pool_by_ptr(texture_pool, texture);
 }
 /*! TEXTURE */
 
@@ -136,7 +136,7 @@ init_bkpr_imm_text :: #force_inline proc(manager: ^BKPR_Manager, text_desc: BKPR
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         imm_text := _init_bkpr_imm_text(res_ptr, text_desc);
-        track(&manager^.allocator.tracker, &imm_text, location);
+        track(&manager^.allocator.tracker, &imm_text._base, location);
         return imm_text;
     } else do return _init_bkpr_imm_text(res_ptr, text_desc);
 }
@@ -145,21 +145,22 @@ init_bkpr_unq_text :: #force_inline proc(manager: ^BKPR_Manager, text_desc: BKPR
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         unq_text := _init_bkpr_unq_text(res_ptr, text_desc);
-        track(&manager^.allocator.tracker, &unq_text, location);
+        track(&manager^.allocator.tracker, &unq_text._base, location);
         return unq_text;
     }
     else do return _init_bkpr_unq_text(res_ptr, text_desc);
 }
 
-dump_bkpr_text_resource :: #force_inline proc(text_pool: ^BKPR_TextPool, imm_text: ^BKPR_Pointer($a, $b)) {
-    fmt.println("Release text resource with id: %v", query_id(text_pool, imm_text^));
-    delete_from_bkpr_pool_by_ptr(text_pool, imm_text);
+dump_bkpr_text_resource :: #force_inline proc(text_pool: ^BKPR_TextPool, text: ^BKPR_Pointer($a, $b)) {
+    fmt.println("Release text resource with id: %v", query_id(text_pool, text^));
+    delete_from_bkpr_pool_by_ptr(text_pool, text);
 }
 /*! TEXT */
 
 /* POLYGON */
 @(private)
 _init_bkpr_imm_polygon :: proc(resource: ^BKPR_Polygon, polygon_desc: BKPR_PolygonDesc) -> BKPR_ImmPolygon {
+    assert(false);
     return BKPR_ImmPolygon {
         resource_ref    = resource,
         type   = .Immutable,
@@ -168,6 +169,7 @@ _init_bkpr_imm_polygon :: proc(resource: ^BKPR_Polygon, polygon_desc: BKPR_Polyg
 }
 @(private)
 _init_bkpr_unq_polygon :: proc(resource: ^BKPR_Polygon, polygon_desc: BKPR_PolygonDesc) -> BKPR_UnqPolygon {
+    assert(false);
     return BKPR_UnqPolygon {
         resource_ref    = resource,
         type   = .Unique,
@@ -180,7 +182,7 @@ init_bkpr_imm_polygon :: #force_inline proc(manager: ^BKPR_Manager, polygon_desc
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         imm_polygon := _init_bkpr_imm_polygon(res_ptr, polygon_desc);
-        track(&manager^.allocator.tracker, &imm_polygon, location);
+        track(&manager^.allocator.tracker, &imm_polygon._base, location);
         return imm_polygon;
     } else do return _init_bkpr_imm_polygon(res_ptr, polygon_desc);
 }
@@ -189,21 +191,22 @@ init_bkpr_unq_polygon :: #force_inline proc(manager: ^BKPR_Manager, polygon_desc
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         unq_polygon := _init_bkpr_unq_polygon(res_ptr, polygon_desc);
-        track(&manager^.allocator.tracker, &unq_polygon, location);
+        track(&manager^.allocator.tracker, &unq_polygon._base, location);
         return unq_polygon;
     }
     else do return _init_bkpr_unq_polygon(res_ptr, polygon_desc);
 }
 
-dump_bkpr_polygon_resource :: #force_inline proc(polygon_pool: ^BKPR_PolygonPool, imm_polygon: ^BKPR_Pointer($a, $b)) {
-    fmt.println("Release polygon resource with id: %v", query_id(polygon_pool, imm_polygon^));
-    delete_from_bkpr_pool_by_ptr(polygon_pool, imm_polygon);
+dump_bkpr_polygon_resource :: #force_inline proc(polygon_pool: ^BKPR_PolygonPool, polygon: ^BKPR_Pointer($a, $b)) {
+    fmt.println("Release polygon resource with id: %v", query_id(polygon_pool, polygon^));
+    delete_from_bkpr_pool_by_ptr(polygon_pool, polygon);
 }
 /*! POLYGON */
 
 /* LINE */
 @(private)
 _init_bkpr_imm_line :: proc(resource: ^BKPR_Line, line_desc: BKPR_LineDesc) -> BKPR_ImmLine {
+    assert(false);
     return BKPR_ImmLine {
         resource_ref    = resource,
         type   = .Immutable,
@@ -212,6 +215,7 @@ _init_bkpr_imm_line :: proc(resource: ^BKPR_Line, line_desc: BKPR_LineDesc) -> B
 }
 @(private)
 _init_bkpr_unq_line :: proc(resource: ^BKPR_Line, line_desc: BKPR_LineDesc) -> BKPR_UnqLine {
+    assert(false);
     return BKPR_UnqLine {
         resource_ref    = resource,
         type   = .Unique,
@@ -223,7 +227,7 @@ init_bkpr_imm_line :: #force_inline proc(manager: ^BKPR_Manager, line_desc: BKPR
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         imm_line := _init_bkpr_imm_line(res_ptr, line_desc);
-        track(&manager^.allocator.tracker, &imm_line, location);
+        track(&manager^.allocator.tracker, &imm_line._base, location);
         return imm_line;
     } else do return _init_bkpr_imm_line(res_ptr, line_desc);
 }
@@ -232,7 +236,7 @@ init_bkpr_unq_line :: #force_inline proc(manager: ^BKPR_Manager, line_desc: BKPR
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         unq_line := _init_bkpr_unq_line(res_ptr, line_desc);
-        track(&manager^.allocator.tracker, &unq_line, location);
+        track(&manager^.allocator.tracker, &unq_line._base, location);
         return unq_line;
     }
     else do return _init_bkpr_unq_line(res_ptr, line_desc);
@@ -242,6 +246,7 @@ init_bkpr_unq_line :: #force_inline proc(manager: ^BKPR_Manager, line_desc: BKPR
 /* PARTICLE */
 @(private)
 _init_bkpr_imm_particle :: proc(resource: ^BKPR_Particle, particle_desc: BKPR_ParticleDesc) -> BKPR_ImmParticle {
+    assert(false);
     return BKPR_ImmParticle {
         resource_ref    = resource,
         type   = .Immutable,
@@ -250,6 +255,7 @@ _init_bkpr_imm_particle :: proc(resource: ^BKPR_Particle, particle_desc: BKPR_Pa
 }
 @(private)
 _init_bkpr_unq_particle :: proc(resource: ^BKPR_Particle, particle_desc: BKPR_ParticleDesc) -> BKPR_UnqParticle {
+    assert(false);
     return BKPR_UnqParticle {
         resource_ref    = resource,
         type   = .Unique,
@@ -262,7 +268,7 @@ init_bkpr_imm_particle :: #force_inline proc(manager: ^BKPR_Manager, particle_de
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         imm_particle := _init_bkpr_imm_particle(res_ptr, particle_desc);
-        track(&manager^.allocator.tracker, &imm_particle, location);
+        track(&manager^.allocator.tracker, &imm_particle._base, location);
         return imm_particle;
     } else do return _init_bkpr_imm_particle(res_ptr, particle_desc);
 }
@@ -272,7 +278,7 @@ init_bkpr_unq_particle :: #force_inline proc(manager: ^BKPR_Manager, particle_de
     if res_ptr == nil do return nil;
     when BKPR_DEBUG_TRACKER_ENABLED {
         unq_particle := _init_bkpr_unq_particle(res_ptr, particle_desc);
-        track(&manager^.allocator.tracker, &unq_particle, location);
+        track(&manager^.allocator.tracker, &unq_particle._base, location);
         return unq_particle;
     }
     else do return _init_bkpr_unq_particle(res_ptr, particle_desc);

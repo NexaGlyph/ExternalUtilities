@@ -87,9 +87,8 @@ delete_from_bkpr_pool_by_ptr :: proc(pool: ^BKPR_Pool($RESOURCE), ptr: ^BKPR_Poi
 {
     for obj in &pool^.memory {
         if ptr.resource_ref == &obj.resource {
-            ptr->dump();
             pool^.unused = &obj;
-            fmt.printf("Object deleting [id: %v]...\n", pool^.unused^.id);
+            when BKPR_DEBUG_TRACKER_ENABLED do fmt.printf("Object deleting [id: %v]...\n", pool^.unused^.id);
             return;
         }
     }
@@ -103,7 +102,7 @@ delete_from_bkpr_pool_by_id :: proc(pool: ^BKPR_Pool($RESOURCE), id: BKPR_PoolOb
     for obj in &pool^.memory {
         if id == obj.id {
             pool^.unused = &obj;
-            fmt.printf("Object deleting [id: %v]...\n", pool^.unused^.id);
+            when BKPR_DEBUG_TRACKER_ENABLED do fmt.printf("Object deleting [id: %v]...\n", pool^.unused^.id);
             return;
         }
     }

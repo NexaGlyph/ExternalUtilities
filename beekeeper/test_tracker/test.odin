@@ -25,7 +25,7 @@ should_not_leak :: proc(beekeeper: ^bkpr.BKPR_Manager) {
     // clean
     tracked := bkpr.block_check(&beekeeper.allocator.tracker);
     assert(len(particle_record) == len(tracked), "Failed to track all the initialized particles!");
-    bkpr.untrack_record(&beekeeper.allocator.tracker, &particle_record);
+    bkpr.untrack_record(&beekeeper.allocator.tracker, particle_record);
 }
 
 main :: proc() {
@@ -58,7 +58,7 @@ main :: proc() {
             }
 
             fmt.println("Untracking Indent 2");
-            for poly in &my_polys do bkpr.untrack(&beekeeper.allocator.tracker, &poly);
+            for poly in &my_polys do bkpr.untrack(&beekeeper.allocator.tracker, &poly._base);
 
             {
                 bkpr.begin_track(&beekeeper.allocator.tracker);
@@ -75,7 +75,7 @@ main :: proc() {
                     fmt.printf("\x1b[0m%v\n", r);
                 }
                 delete(record);
-                bkpr.untrack_record(&beekeeper.allocator.tracker, &record);
+                bkpr.untrack_record(&beekeeper.allocator.tracker, record);
                 bkpr.end_track(&beekeeper.allocator.tracker);
             }
 
