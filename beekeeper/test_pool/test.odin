@@ -55,35 +55,42 @@ test2 :: proc(beekeeper: ^bkpr.BKPR_Manager) -> bool {
 
         // TODO: Make one function out of this...
         display_text_immutable :: proc(text: ^bkpr.BKPR_ImmText) {
-            fmt.printf("Displaying text: %v\n", text->address()^.dummy_text);
+            fmt.printf("Displaying text: %v\n", text->address()^.text);
         }
         display_text_unique :: proc(text: ^bkpr.BKPR_UnqText) {
-            fmt.printf("Displaying text: %v\n", text->address()^.dummy_text);
+            fmt.printf("Displaying text: %v\n", text->address()^.text);
         }
 
-        imm_text, _ := bkpr.init_bkpr_imm_text(beekeeper, { text_buffer }).?;
+        imm_text, _ := bkpr.init_bkpr_imm_text(beekeeper, {
+            pos = { 10, 10 },
+            col = { 100, 100, 100, 255 },
+            text_buffer = text_buffer,
+        }).?;
         when bkpr.BKPR_DEBUG_TRACKER_ENABLED do defer bkpr.untrack(&beekeeper^.allocator.tracker, &imm_text._base);
         defer bkpr.dump_bkpr_text_resource(&beekeeper^.text_pool, &imm_text._base);
         fmt.println("Display immutable text....\n");
         display_text_immutable(&imm_text);
 
-        unq_text, _ := bkpr.init_bkpr_unq_text(beekeeper, { text_buffer }).?;
+        unq_text, _ := bkpr.init_bkpr_unq_text(beekeeper, {
+            pos = { 20, 20 },
+            col = { 0, 0, 0, 255 },
+            text_buffer = text_buffer,
+        }).?;
         when bkpr.BKPR_DEBUG_TRACKER_ENABLED do defer bkpr.untrack(&beekeeper^.allocator.tracker, &unq_text._base);
         defer bkpr.dump_bkpr_text_resource(&beekeeper^.text_pool, &unq_text._base);
         fmt.println("Display unique text....\n");
         display_text_unique(&unq_text);
         fmt.println("Display unique text after update [SHOULD SEE 'NEW!']....\n");
         {
-            update_text_desc := bkpr.BKPR_TextUpdateDesc{
-                dummy_text_buffer = make([]u8, 5),
+            text_component_data := bkpr.TextComponentData {
+                text_buffer = make([]u8, 5),
             };
-            // [78, 69, 87, 33, 10]
-            update_text_desc.dummy_text_buffer[0] = 78; // N
-            update_text_desc.dummy_text_buffer[1] = 69; // E
-            update_text_desc.dummy_text_buffer[2] = 87; // W
-            update_text_desc.dummy_text_buffer[3] = 33; // !
-            update_text_desc.dummy_text_buffer[4] = 10; // \n;
-            unq_text->update(&update_text_desc);
+            text_component_data.text_buffer[0] = 78; // N
+            text_component_data.text_buffer[1] = 69; // E
+            text_component_data.text_buffer[2] = 87; // W
+            text_component_data.text_buffer[3] = 33; // !
+            text_component_data.text_buffer[4] = 10; // \n;
+            unq_text->update(.BKPR_Text_UpdateString, &text_component_data);
         }
         display_text_unique(&unq_text);
 

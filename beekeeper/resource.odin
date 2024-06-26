@@ -15,14 +15,37 @@ BKPR_Resource :: union {
     BKPR_Particle,
 }
 
+BKPR_ResourceUpdateType :: enum {
+    BKPR_ResourceBase_UpdatePosition,
+    BKPR_ResourceBase_UpdateColor,
+
+    BKPR_Texture_UpdateMemory,
+
+    BKPR_Text_UpdateString,
+}
+
+@(private)
+/* this should be only illustrative structure of the NexaCore's utils_mem.Object */
+GPU_MemoryComponent :: struct {
+    vertex_buffer: rawptr,
+    render_bufffer: rawptr,
+}
+BKPR_ResourceBase :: struct {
+    pos: PositionComponent,
+    col: ColorComponent,
+    _memory: GPU_MemoryComponent,
+}
+
 /* TEXTURE */
 BKPR_TextureDesc :: struct {
-
+    using _: PositionComponentData, // for BKPR_Texture._base.pos
+    using _: ColorComponentData, // for BKPR_Texture._base.color
+    using _: TextureMemoryComponentData, // for BKPR_Texture.texture
 }
-BKPR_TextureUpdateDesc :: struct {
-
+BKPR_Texture :: struct {
+    #subtype _base: BKPR_ResourceBase,
+    texture: ^D3D11.ITexture2D,
 }
-BKPR_Texture :: ^D3D11.ITexture2D;
 
 BKPR_ImmTextureVTABLE :: BKPR_PointerImmutableVTABLE(BKPR_Texture);
 BKPR_UnqTextureVTABLE :: BKPR_PointerUniqueVTABLE(BKPR_Texture);
@@ -53,21 +76,47 @@ vtable_dump_unq_texture :: proc(this: ^BKPR_UnqTexture) {
 
 /* UNIQUE TEXTURE VTABLE */
 @(private)
-vtable_unique_update_texture :: proc(this: ^BKPR_UnqTexture, update_desc: rawptr) {
-    // update_desc := cast(^BKPR_TextureUpdateDesc)update_desc;
-    fmt.println("Updating texture!");
+vtable_unique_texture_update_pos :: proc(this: ^BKPR_UnqTexture, pos: PositionComponentData) {
+    this^.resource_ref^._base.pos.data = pos;
+    fmt.printf("Value of pos component of pointer unique of type [BKPR_UnqTexture] changed to: %v\n", this^.resource_ref^._base.pos);
+}
+@(private)
+vtable_unique_texture_update_col :: proc(this: ^BKPR_UnqTexture, col: ColorComponentData) {
+    this^.resource_ref^._base.col.data = col;
+    fmt.printf("Value of col component of pointer unique of type [BKPR_UnqTexture] changed to: %v\n", this^.resource_ref^._base.col);
+}
+
+@(private)
+vtable_unique_update_texture :: proc(this: ^BKPR_UnqTexture, cmd_update_type: BKPR_ResourceUpdateType, update_data: rawptr) {
+    switch cmd_update_type {
+        case .BKPR_ResourceBase_UpdateColor:
+            this->update_col((cast(^ColorComponentData)update_data)^);
+        case .BKPR_ResourceBase_UpdatePosition:
+            this->update_pos((cast(^PositionComponentData)update_data)^);
+
+        case .BKPR_Texture_UpdateMemory:
+            update_data := cast(^TextureMemoryComponentData)update_data;
+            fmt.printf("Updating texture's memory with value: %v!", update_data^);
+
+        case .BKPR_Text_UpdateString:
+            assert(false, "Invalid cmd_update_type!");
+    }
+}
+@(private)
+vtable_unique_recreate_texture :: proc(this: ^BKPR_UnqTexture, update_data: rawptr) {
+    update_data := cast(^BKPR_TextureDesc)update_data;
+    fmt.printf("Recreating texture with data: %v", update_data^);
 }
 
 /* TEXT */
 BKPR_TextDesc :: struct {
-    dummy_text_buffer: []u8,
-}
-BKPR_TextUpdateDesc :: struct {
-    dummy_text_buffer: []u8,
+    using _: PositionComponentData, // for BKPR_Text._base.pos
+    using _: ColorComponentData, // for BKPR_Text._base.color
+    using _: TextComponentData, // for BKPR_Text.text
 }
 BKPR_Text :: struct {
-    dummy_text: string,
-    dummy_color: string,
+    #subtype _base: BKPR_ResourceBase,
+    text: string,
 }
 
 BKPR_ImmTextVTABLE :: BKPR_PointerImmutableVTABLE(BKPR_Text);
@@ -99,10 +148,37 @@ vtable_dump_unq_text :: proc(this: ^BKPR_UnqText) {
 
 /* UNIQUE TEXT VTABLE */
 @(private)
-vtable_unique_update_text :: proc(this: ^BKPR_UnqText, update_desc: rawptr) {
-    update_desc := cast(^BKPR_TextUpdateDesc)update_desc;
-    fmt.println("Updating text!");
-    this^.resource_ref^.dummy_text = string(update_desc^.dummy_text_buffer);
+vtable_unique_text_update_pos :: proc(this: ^BKPR_UnqText, pos: PositionComponentData) {
+    this^.resource_ref^._base.pos.data = pos;
+    fmt.printf("Value of pos component of pointer unique of type [BKPR_UnqText] changed to: %v\n", this^.resource_ref^._base.pos);
+}
+@(private)
+vtable_unique_text_update_col :: proc(this: ^BKPR_UnqText, col: ColorComponentData) {
+    this^.resource_ref^._base.col.data = col;
+    fmt.printf("Value of col component of pointer unique of type [BKPR_UnqText] changed to: %v\n", this^.resource_ref^._base.col);
+}
+
+@(private)
+vtable_unique_update_text :: proc(this: ^BKPR_UnqText, cmd_update_type: BKPR_ResourceUpdateType, update_data: rawptr) {
+    switch cmd_update_type {
+        case .BKPR_ResourceBase_UpdateColor:
+            this->update_col((cast(^ColorComponentData)update_data)^);
+        case .BKPR_ResourceBase_UpdatePosition:
+            this->update_pos((cast(^PositionComponentData)update_data)^);
+
+        case .BKPR_Texture_UpdateMemory:
+            assert(false, "Invalid cmd_update_type!");
+
+        case .BKPR_Text_UpdateString:
+            update_data := cast(^TextComponentData)update_data;
+            fmt.printf("Updating text's memory with value: %v!", update_data^);
+            this^.resource_ref^.text = string(update_data^.text_buffer);
+    }
+}
+@(private)
+vtable_unique_recreate_text :: proc(this: ^BKPR_UnqText, update_data: rawptr) {
+    update_data := cast(^BKPR_TextDesc)update_data;
+    fmt.printf("Recreating texture with data: %v", update_data^);
 }
 
 /* POLYGON */

@@ -9,9 +9,7 @@ BKPR_PointerType :: enum u8 {
     Shared = 2,
 }
 
-BKPR_Pointer :: struct($MEMORY: typeid, $VTABLE: typeid)
-    where intrinsics.type_is_variant_of(BKPR_Resource, MEMORY)
-{
+BKPR_Pointer :: struct($MEMORY: typeid, $VTABLE: typeid) {
     resource_ref: ^MEMORY,
     type: BKPR_PointerType,
     using vtable: VTABLE,
@@ -79,7 +77,13 @@ BKPR_PointerUniqueVTABLE :: struct($MEMORY: typeid)
     dump:          proc(this: ^BKPR_PointerUnique(MEMORY)),
     address:       proc(this: ^BKPR_PointerUnique(MEMORY)) -> ^MEMORY,
 
-    update:        proc(this: ^BKPR_PointerUnique(MEMORY), update_desc: rawptr),
+    // since position and color are defined in BKPR_ResourceBase, can handle their updates explicitly
+    update_pos:    proc(this: ^BKPR_PointerUnique(MEMORY), pos: PositionComponentData),
+    update_col:    proc(this: ^BKPR_PointerUnique(MEMORY), col: ColorComponentData),
+    // any non-trivial update will go here...
+    update:        proc(this: ^BKPR_PointerUnique(MEMORY), cmd_update_type: BKPR_ResourceUpdateType, update_data: rawptr),
+    // if you want to change many at once... (note the update_data param is assumed to be a pointer to the appropriate BKPR_(MEMORY)Desc!)
+    recreate:      proc(this: ^BKPR_PointerUnique(MEMORY), update_data: rawptr)
 }
 
 /**

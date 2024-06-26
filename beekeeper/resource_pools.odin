@@ -73,7 +73,12 @@ _init_bkpr_unq_texture :: proc(resource: ^BKPR_Texture, texture_desc: BKPR_Textu
         vtable = BKPR_UnqTextureVTABLE{
             dump = vtable_dump_unq_texture,
             address = vtable_address_unq_texture,
+
+            update_pos = vtable_unique_texture_update_pos,
+            update_col = vtable_unique_texture_update_col,
+
             update = vtable_unique_update_texture,
+            recreate = vtable_unique_recreate_texture,
         },
     };
 }
@@ -107,7 +112,9 @@ dump_bkpr_texture_resource :: #force_inline proc(texture_pool: ^BKPR_TexturePool
 /* TEXT */
 @(private)
 _init_bkpr_imm_text :: proc(resource: ^BKPR_Text, text_desc: BKPR_TextDesc) -> BKPR_ImmText {
-    resource^.dummy_text = string(text_desc.dummy_text_buffer);
+    resource^.text = string(text_desc.text_buffer);
+    resource^._base.col.data = { text_desc.col };
+    resource^._base.pos.data = { text_desc.pos };
     return BKPR_ImmText {
         resource_ref = resource,
         type   = .Immutable,
@@ -119,14 +126,21 @@ _init_bkpr_imm_text :: proc(resource: ^BKPR_Text, text_desc: BKPR_TextDesc) -> B
 }
 @(private)
 _init_bkpr_unq_text :: proc(resource: ^BKPR_Text, text_desc: BKPR_TextDesc) -> BKPR_UnqText {
-    resource^.dummy_text = string(text_desc.dummy_text_buffer);
+    resource^.text = string(text_desc.text_buffer);
+    resource^._base.col.data = { text_desc.col };
+    resource^._base.pos.data = { text_desc.pos };
     return BKPR_UnqText {
         resource_ref = resource,
         type   = .Unique,
         vtable = BKPR_UnqTextVTABLE{
             dump = vtable_dump_unq_text,
             address = vtable_address_unq_text,
+
+            update_pos = vtable_unique_text_update_pos,
+            update_col = vtable_unique_text_update_col,
+
             update = vtable_unique_update_text,
+            recreate = vtable_unique_recreate_text,
         },
     };
 }

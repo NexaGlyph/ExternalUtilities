@@ -23,34 +23,37 @@ test2 :: proc(beekeeper: ^bkpr.BKPR_Manager) -> bool {
     when bkpr.BKPR_DEBUG_TRACKER_ENABLED do bkpr.begin_track(&beekeeper^.allocator.tracker);
     {
         unq_text_desc := bkpr.BKPR_TextDesc {
-            make([]u8, 4),
+            pos = { 10, 10 },
+            col = { 25, 251, 32, 255 },
+            text_buffer = make([]u8, 4),
         };
-        unq_text_desc.dummy_text_buffer[0] = 116;
-        unq_text_desc.dummy_text_buffer[1] = 101;
-        unq_text_desc.dummy_text_buffer[2] = 120;
-        unq_text_desc.dummy_text_buffer[3] = 116;
-        defer delete(unq_text_desc.dummy_text_buffer);
+        unq_text_desc.text_buffer[0] = 116;
+        unq_text_desc.text_buffer[1] = 101;
+        unq_text_desc.text_buffer[2] = 120;
+        unq_text_desc.text_buffer[3] = 116;
+        defer delete(unq_text_desc.text_buffer);
 
         unq_text, ok := bkpr.init_bkpr_unq_text(beekeeper, unq_text_desc).?;
+        if !ok do return false;
         defer unq_text->dump();
         when bkpr.BKPR_DEBUG_TRACKER_ENABLED do defer bkpr.untrack(&beekeeper^.allocator.tracker, &unq_text._base);
 
         // check basic functions
         if unq_text->address() != unq_text.resource_ref do return false;
-        new_dummy_text_buffer := make([]u8, 8);
+        new_text_buffer := make([]u8, 8);
         {
-            new_dummy_text_buffer[0] = 110;
-            new_dummy_text_buffer[1] = 101;
-            new_dummy_text_buffer[2] = 119;
-            new_dummy_text_buffer[3] = 95;
-            new_dummy_text_buffer[4] = 116;
-            new_dummy_text_buffer[5] = 101;
-            new_dummy_text_buffer[6] = 120;
-            new_dummy_text_buffer[7] = 116;
+            new_text_buffer[0] = 110;
+            new_text_buffer[1] = 101;
+            new_text_buffer[2] = 119;
+            new_text_buffer[3] = 95;
+            new_text_buffer[4] = 116;
+            new_text_buffer[5] = 101;
+            new_text_buffer[6] = 120;
+            new_text_buffer[7] = 116;
         }
-        new_text_desc := bkpr.BKPR_TextUpdateDesc { new_dummy_text_buffer };
-        unq_text->update(&new_text_desc);
-        if unq_text.resource_ref.dummy_text != "new_text" do return false;
+        new_text_desc := bkpr.TextComponentData { new_text_buffer };
+        unq_text->update(.BKPR_Text_UpdateString, &new_text_desc);
+        if unq_text.resource_ref.text != "new_text" do return false;
     }
     when bkpr.BKPR_DEBUG_TRACKER_ENABLED do bkpr.block_check_auto(&beekeeper^.allocator.tracker);
 
