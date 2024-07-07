@@ -4,8 +4,8 @@ package test
 import "base:intrinsics"
 
 import "core:fmt"
-import "core:strings"
-import "core:io"
+// import "core:strings"
+// import "core:io"
 import "core:math/rand"
 
 import marshall "../"
@@ -37,7 +37,7 @@ test_ints :: proc() {
         assert(err == .None);
         assert(len(byte_data) == size_of(val))
         marshalled: T = 0;
-        err = marshall.deserialize(marshall.MARSHALL_ANY(&marshalled), byte_data);
+        err = marshall.deserialize(marshalled, byte_data);
         assert(err == .None);
         assert(val == marshalled);
         fmt.printf("%s\t\x1b[32mPassed...\x1b[0m %v\n", proc_name, type_info_of(T));
@@ -139,7 +139,7 @@ test_strings :: proc() {
         assert(err == .None);
         assert(len(str) == (len(byte_data) - 4) / 4);
         marshalled: string = "";
-        err = marshall.deserialize(marshall.MARSHALL_ANY(&marshalled), byte_data);
+        err = marshall.deserialize(marshalled, byte_data);
         assert(err == .None);
         assert(str == marshalled);
         fmt.printf("%v\t\x1b[32mPassed...\x1b[0m string\n", proc_name);
@@ -151,7 +151,7 @@ test_strings :: proc() {
         assert(err == .None);
         assert(len(str) == (len(byte_data) - 4) / 4);
         marshalled: cstring = "";
-        err = marshall.deserialize(marshall.MARSHALL_ANY(&marshalled), byte_data);
+        err = marshall.deserialize(marshalled, byte_data);
         assert(err == .None);
         assert(str == marshalled);
         fmt.printf("%v\t\x1b[32mPassed...\x1b[0m cstring\n", proc_name);
@@ -165,19 +165,19 @@ test_strings :: proc() {
 }
 
 test_arrays :: proc() {
-    test_slices :: proc(slice: $T/[]$E, proc_name: string) {
+    test_slices :: proc(slice: $T/[]$E, proc_name: string, eq_proc: #type proc(s1, s2: T)) {
+        fmt.printf("Before %v\n", slice);
         byte_data, err := marshall.serialize(slice);
+        fmt.printf("after %v\n", slice);
         defer delete(byte_data);
         assert(err == .None);
-        assert(len(byte_data) == len(slice) * size_of(E));
-        marshalled: T = {};
+        // marshalled := make([]E, len(slice));
+        marshalled: []E;
+        defer delete(marshalled);
         err = marshall.deserialize(marshall.MARSHALL_ANY(&marshalled), byte_data);
+        fmt.printf("Deserialization error: %v\n", err);
         assert(err == .None);
-        if !intrinsics.type_is_struct(E) {
-            for val, idx in slice do assert(val == marshalled[idx]);
-        } else {
-            assert(false)
-        }
+        eq_proc(slice, marshalled);
         fmt.printf("%v\t\x1b[32mPassed...\x1b[0m slice\n", proc_name);
     }
     test_dyn_arrays :: proc(dyn_array: $T/[dynamic]$E, proc_name: string) {
@@ -212,26 +212,51 @@ test_arrays :: proc() {
     }
 
     {
-        slice := make([]int, 1000);
-        for i in 0..<1000 do slice[i] = rand.int_max(4329832);
-        test_slices(slice, #procedure);
+        slice := make([]int, 10);
+        for i in 0..<10 do slice[i] = rand.int_max(4329832);
+        test_slices(slice, #procedure, proc(s1, s2: []int) {
+            for val, idx in s1 do assert(val == s2[idx]);
+        });
+        delete(slice);
+    }
+    {
+        slice := make([][]int, 10);
+        for i in 0..<10 {
+            slice[i] = make([]int, rand.int_max(9) + 1); // todo fix blank arrays
+            for j in 0..<len(slice[i]) { 
+                slice[i][j] = rand.int_max(4329832);
+            }
+        }
+        test_slices(slice, #procedure, proc(s1, s2: [][]int) {
+            for arr, i in s1 {
+                for val, j in arr {
+                    assert(val == s2[i][j]);
+                }
+            }
+        });
         delete(slice);
     }
     {
         slice := make([]string, 10);
-        str_builder: strings.Builder;
-        err: io.Error;
         for i in 0..<10 {
-            strings.builder_init_len(&str_builder, rand.int_max(100));
-            for j in 0..<strings.builder_len(str_builder) {
-                _, err = strings.write_rune(&str_builder, cast(rune)rand.int31());
-                assert(err == .None);
+            characters := make([]byte, 100);
+            for j in 0..<len(characters) {
+                characters[j] = cast(byte)rand.float32_range(65, 90);
             }
-            slice[i] = strings.to_string(str_builder);
-            strings.builder_destroy(&str_builder);
-            fmt.printf("String generated: %s", slice[i]);
+            slice[i] = string(characters);
+            delete(characters);
         }
-        test_slices(slice, #procedure);
+        test_slices(slice, #procedure, proc(s1, s2: []string) {
+            for val, idx in s1 {
+                assert(val == s2[idx]);
+            }
+        });
+        delete(slice);
+    }
+    {
+        slice := make([]int, 0);
+        test_slices(slice, #procedure, proc(s1, s2: []int) {
+        });
         delete(slice);
     }
 

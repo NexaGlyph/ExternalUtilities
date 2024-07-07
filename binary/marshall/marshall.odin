@@ -14,19 +14,22 @@ import "core:strings"
 import binary "../"
 
 Marshall_Error :: enum {
-    None,                // no error
+    None,                           // no error
 
-    InvalidType,         // unsupported type for marshalling/unmarshalling
-    TypeMismatch,        // type mismatch during unmarshalling
-    OutOfMemory,         // not enough memory for buffers
-    BufferOverflow,      // buffer is not large enough
-    WriteError,          // error during writing
-    ReadError,           // error during reading
-    InvalidEndianness,   // unsupported endianness
-    ArraySizeMismatch,   // array size mismatch
-    StringTooLong,       // string length exceeds limits
-    StringBufferSizeMismatch, // expected size of the string buffer is not divisible by 4 (used for runes)
-    UnknownError         // unknown error
+    InvalidType,                    // unsupported type for marshalling/unmarshalling
+    TypeMismatch,                   // type mismatch during unmarshalling
+    OutOfMemory,                    // not enough memory for buffers
+    BufferOverflow,                 // buffer is not large enough
+    WriteError,                     // error during writing
+    ReadError,                      // error during reading
+    InvalidEndianness,              // unsupported endianness
+    ArraySizeMismatch,              // array size mismatch (happens during unmarshalling when static array size is not the same of the marshall buffer provided)
+    InternalAllocationError,        // this is launched when either "runtime" or "mem" package return AllocationError
+    StringTooLong,                  // string length exceeds limits
+    ArrayTooLong,                   // array/slice/dynarray length exceeds limits
+    StringBufferSizeMismatch,       // expected size of the string buffer is not divisible by 4 (used for runes)
+    IndexableAmbiguous,
+    UnknownError                    // unknown error
 }
 
 /**
@@ -138,34 +141,47 @@ interpret_string_null_terminated :: proc(str: cstring) -> ([]byte, Marshall_Erro
 /*! STRING */
 /* ARRAY */
 interpret_array :: proc(arr: any, v: runtime.Type_Info_Array) -> (byte_data: []byte, err: Marshall_Error) {
-    byte_data_temp := make([dynamic][^]byte);
-    element_size: u32 = 0;
-    byte_data_len: u32 = 0;
+
+    if v.count > 1 << (size_of(u32) * 8) do return nil, .ArrayTooLong;
+
+    ByteData :: struct {
+        data: [^]byte,
+        size: int,
+    }
+
+    byte_data_temp := make([dynamic]ByteData);
+    byte_data_len: int = 0;
     for it := 0; it < v.count; {
         val, idx, fine := reflect.iterate_array(arr, &it);
         if !fine do break;
 
-        byte_array := serialize(val) or_return;
-        defer delete(byte_array);
+        serialized := serialize(val) or_return;
+        defer delete(serialized);
 
-        append(&byte_data_temp, intrinsics.alloca(len(byte_array), align_of(byte)));
-        mem.copy(byte_data_temp[idx], raw_data(byte_array), len(byte_array));
+        append(
+            &byte_data_temp, 
+            ByteData {
+                data = intrinsics.alloca(len(serialized), align_of(byte)),
+                size = len(serialized),
+            },
+        );
+        byte_data := &byte_data_temp[it - 1];
+        mem.copy(byte_data^.data, raw_data(serialized), byte_data^.size);
 
-        element_size = u32(len(byte_array));
-        byte_data_len += element_size;
+        byte_data_len += byte_data^.size;
+
     }
 
-    byte_data = make([]byte, byte_data_len);
-    prev_pos: u32 = 0;
+    byte_data = make([]byte, 4 + byte_data_len /* since this is indexable type, 4 bytes of size */);
+    length_byte_data := interpret_int_data(u32(v.count));
+    copy_slice(byte_data[:4], length_byte_data);
+    delete(length_byte_data);
+    prev_pos := 4;
     for data in byte_data_temp {
-        mem.copy(raw_data(byte_data[prev_pos:prev_pos + element_size]), data, int(element_size));
-        prev_pos += element_size;
+        mem.copy(raw_data(byte_data[prev_pos:prev_pos + data.size]), data.data, int(data.size));
+        prev_pos += data.size;
     }
     return;
-}
-
-interpret_slice :: proc() {
-
 }
 /*! ARRAY */
 /* STRUCT */
@@ -222,7 +238,11 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
                     case i16:     return interpret_int_data(integer_data), .None;
                     case i32:     return interpret_int_data(integer_data), .None;
                     case i64:     return interpret_int_data(integer_data), .None;
-                    case int:     return interpret_int_data(integer_data), .None;
+                    case int: {
+                        data := interpret_int_data(integer_data);
+                        // fmt.printf("Interpreted data [%v] into [%v]\n", integer_data, data);
+                        return data, .None;
+                    }
                     case u8:      return interpret_int_data(integer_data), .None;
                     case u16:     return interpret_int_data(integer_data), .None;
                     case u32:     return interpret_int_data(integer_data), .None;
@@ -294,14 +314,14 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
             case runtime.Type_Info_Pointer: // todo
                 return serialize(base_data.data);
 
-            case runtime.Type_Info_Multi_Pointer: // todo
+            case runtime.Type_Info_Multi_Pointer: // todo, do not forget to write its size
                 return nil, .InvalidType;
 
             case runtime.Type_Info_Procedure:
                 return nil, .InvalidType;
 
             case runtime.Type_Info_Array:
-                if v.count > 0 do return interpret_array(base_data, v);
+                return interpret_array(base_data, v);
 
             case runtime.Type_Info_Enumerated_Array: // todo
                 return nil, .InvalidType;
@@ -366,22 +386,18 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
 
 /* INTEGER */ 
 interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Error {
-    switch integer_data in val {
-        case ^i8:
-            data := cast(^i8)val.data; // todo overflow check
-            data^ = i8(bytes[0]);
+    switch &data in val {
+        case i8:
+            data = i8(bytes[0]); // todo buffer overflow
 
-        case ^i16:
-            data := cast(^i16)val.data;
-            data^ = i16(bytes[1]) << 8 | i16(bytes[0]);
+        case i16:
+            data = i16(bytes[1]) << 8 | i16(bytes[0]);
 
-        case ^i32:
-            data := cast(^i32)val.data;
-            data^ = i32(bytes[3]) << 24 | i32(bytes[2]) << 16 | i32(bytes[1]) << 8 | i32(bytes[0]);
+        case i32:
+            data = i32(bytes[3]) << 24 | i32(bytes[2]) << 16 | i32(bytes[1]) << 8 | i32(bytes[0]);
 
-        case ^i64:
-            data := cast(^i64)val.data;
-            data^ = (
+        case i64:
+            data = (
                 i64(bytes[7]) << 56 | 
                 i64(bytes[6]) << 48 |
                 i64(bytes[5]) << 40 | 
@@ -391,17 +407,14 @@ interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 i64(bytes[1]) <<  8 |
                 i64(bytes[0]));
 
-        case ^i16le:
-            data := cast(^i16le)val.data;
-            data^ = i16le(bytes[1]) << 8 | i16le(bytes[0]);
+        case i16le:
+            data = i16le(bytes[1]) << 8 | i16le(bytes[0]);
 
-        case ^i32le:
-            data := cast(^i32le)val.data;
-            data^ = i32le(bytes[3]) << 24 | i32le(bytes[2]) << 16 | i32le(bytes[1]) << 8 | i32le(bytes[0]);
+        case i32le:
+            data = i32le(bytes[3]) << 24 | i32le(bytes[2]) << 16 | i32le(bytes[1]) << 8 | i32le(bytes[0]);
 
-        case ^i64le:
-            data := cast(^i64le)val.data;
-            data^ = (
+        case i64le:
+            data = (
                 i64le(bytes[7]) << 56 | 
                 i64le(bytes[6]) << 48 |
                 i64le(bytes[5]) << 40 | 
@@ -411,9 +424,8 @@ interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 i64le(bytes[1]) <<  8 |
                 i64le(bytes[0]));
 
-        case ^int:
-            data := cast(^int)val.data;
-            data^ = (
+        case int:
+            data = (
                 int(bytes[7]) << 56 | 
                 int(bytes[6]) << 48 |
                 int(bytes[5]) << 40 | 
@@ -422,22 +434,19 @@ interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 int(bytes[2]) << 16 |
                 int(bytes[1]) <<  8 |
                 int(bytes[0]));
+            // fmt.printf("Interpreting byte data: %v; as: %v\n", bytes, data);
 
-        case ^u8:
-            data := cast(^u8)val.data; // todo overflow check
-            data^ = bytes[0];
+        case u8:
+            data = bytes[0];
 
-        case ^u16:
-            data := cast(^u16)val.data;
-            data^ = u16(bytes[1]) << 8 | u16(bytes[0]);
+        case u16:
+            data = u16(bytes[1]) << 8 | u16(bytes[0]);
 
-        case ^u32:
-            data := cast(^u32)val.data;
-            data^ = u32(bytes[3]) << 24 | u32(bytes[2]) << 16 | u32(bytes[1]) << 8 | u32(bytes[0]);
+        case u32:
+            data = u32(bytes[3]) << 24 | u32(bytes[2]) << 16 | u32(bytes[1]) << 8 | u32(bytes[0]);
 
-        case ^u64:
-            data := cast(^u64)val.data;
-            data^ = (
+        case u64:
+            data = (
                 u64(bytes[7]) << 56 | 
                 u64(bytes[6]) << 48 |
                 u64(bytes[5]) << 40 | 
@@ -447,17 +456,14 @@ interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 u64(bytes[1]) <<  8 |
                 u64(bytes[0]));
 
-        case ^u16le:
-            data := cast(^u16le)val.data;
-            data^ = u16le(bytes[1]) << 8 | u16le(bytes[0]);
+        case u16le:
+            data = u16le(bytes[1]) << 8 | u16le(bytes[0]);
 
-        case ^u32le:
-            data := cast(^u32le)val.data;
-            data^ = u32le(bytes[3]) << 24 | u32le(bytes[2]) << 16 | u32le(bytes[1]) << 8 | u32le(bytes[0]);
+        case u32le:
+            data = u32le(bytes[3]) << 24 | u32le(bytes[2]) << 16 | u32le(bytes[1]) << 8 | u32le(bytes[0]);
 
-        case ^u64le:
-            data := cast(^u64le)val.data;
-            data^ = (
+        case u64le:
+            data = (
                 u64le(bytes[7]) << 56 | 
                 u64le(bytes[6]) << 48 |
                 u64le(bytes[5]) << 40 | 
@@ -467,9 +473,8 @@ interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 u64le(bytes[1]) <<  8 |
                 u64le(bytes[0]));
 
-        case ^uint:
-            data := cast(^uint)val.data;
-            data^ = (
+        case uint:
+            data = (
                 uint(bytes[7]) << 56 | 
                 uint(bytes[6]) << 48 |
                 uint(bytes[5]) << 40 | 
@@ -487,18 +492,15 @@ interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
     return .None;
 }
 interpret_bytes_to_int_be_data :: proc(val: any, bytes: []byte) -> Marshall_Error {
-    switch integer_data in val {
-        case ^i16be:
-            data := cast(^i16be)val.data;
-            data^ = i16be(bytes[1]) | i16be(bytes[0]) << 8;
+    switch &data in val {
+        case i16be:
+            data = i16be(bytes[1]) | i16be(bytes[0]) << 8;
 
-        case ^i32be:
-            data := cast(^i32be)val.data;
-            data^ = i32be(bytes[3]) | i32be(bytes[2]) << 8 | i32be(bytes[1]) << 16 | i32be(bytes[0]) << 24;
+        case i32be:
+            data = i32be(bytes[3]) | i32be(bytes[2]) << 8 | i32be(bytes[1]) << 16 | i32be(bytes[0]) << 24;
 
-        case ^i64be:
-            data := cast(^i64be)val.data;
-            data^ = (
+        case i64be:
+            data = (
                 i64be(bytes[7])       | 
                 i64be(bytes[6]) << 8  |
                 i64be(bytes[5]) << 16 | 
@@ -508,9 +510,8 @@ interpret_bytes_to_int_be_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 i64be(bytes[1]) << 48 |
                 i64be(bytes[0]) << 56);
 
-        case ^int:
-            data := cast(^int)val.data;
-            data^ = (
+        case int:
+            data = (
                 int(bytes[7])       | 
                 int(bytes[6]) << 8  |
                 int(bytes[5]) << 16 | 
@@ -520,17 +521,14 @@ interpret_bytes_to_int_be_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 int(bytes[1]) << 48 |
                 int(bytes[0]) << 56);
 
-        case ^u16be:
-            data := cast(^u16be)val.data;
-            data^ = u16be(bytes[1]) | u16be(bytes[0]) >> 8;
+        case u16be:
+            data = u16be(bytes[1]) | u16be(bytes[0]) >> 8;
 
-        case ^u32be:
-            data := cast(^u32be)val.data;
-            data^ = u32be(bytes[3]) | u32be(bytes[2]) >> 8 | u32be(bytes[1]) >> 16 | u32be(bytes[0]) >> 24;
+        case u32be:
+            data = u32be(bytes[3]) | u32be(bytes[2]) >> 8 | u32be(bytes[1]) >> 16 | u32be(bytes[0]) >> 24;
 
-        case ^u64be:
-            data := cast(^u64be)val.data;
-            data^ = (
+        case u64be:
+            data = (
                 u64be(bytes[7])       | 
                 u64be(bytes[6]) << 8  |
                 u64be(bytes[5]) << 16 | 
@@ -540,9 +538,8 @@ interpret_bytes_to_int_be_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 u64be(bytes[1]) << 48 |
                 u64be(bytes[0]) << 56);
 
-        case ^uint:
-            data := cast(^uint)val.data;
-            data^ = (
+        case uint:
+            data = (
                 uint(bytes[7])       | 
                 uint(bytes[6]) << 8  |
                 uint(bytes[5]) << 16 | 
@@ -634,17 +631,12 @@ when ODIN_ENDIAN == .Big {
 interpret_bytes_to_string :: proc(data: []byte) -> (string, Marshall_Error) {
     if len(data) % 4 != 0 do return "", .StringBufferSizeMismatch;
     characters_len: u32 = 0;
-    interpret_bytes_to_int_data(
-        any { &characters_len, typeid_of(^u32) },
-        data[:4],
-    );
+    fmt.printf("Bytes_to_string:: %v\n", data);
+    interpret_bytes_to_int_data(characters_len, data[:4]);
     characters := make([]i32, characters_len);
     for i := 4; i < len(data); i += 4 {
         // fmt.printf("[%v:%v] :: %v\n", i, i + 4, data[i : i + 4]);
-        interpret_bytes_to_int_data(
-            any { &characters[(i - 1) / 4], typeid_of(^i32) },
-            data[i : i + 4],
-        );
+        interpret_bytes_to_int_data(characters[(i - 1) / 4], data[i : i + 4]);
     }
     // fmt.printf("[%v:%v] :: %v\n", len(data) - 4, len(data), data[len(data) - 4 : len(data)]);
     // fmt.printf("%v\n", characters);
@@ -670,6 +662,163 @@ interpret_bytes_to_cstring :: proc(data: []byte) -> (cstring, Marshall_Error) {
     return strings.clone_to_cstring(string_data), err;
 }
 /*! STRING */
+/* ARRAY */
+
+@(private)
+_interpret_bytes_to_array_with_indexable_elements :: #force_inline proc(
+    val: any, 
+    count: u32,
+    element_id: typeid,
+    data: []byte) -> (err: Marshall_Error) 
+{
+    elem_size: u32 = cast(u32)type_info_of(element_id).size;
+    subarray_len: u32 = 0;
+    whole_size: u32 = 0;
+    for i: u32 = 0; i < count; i += 1 {
+        // read length of one subarray
+        interpret_bytes_to_int_data(subarray_len, data[whole_size : whole_size + 4]) or_return;
+        fmt.printf("Subarray size: %v\nWhole size: %v\n", subarray_len, whole_size);
+
+        // allocate the subarray buffer
+        array_byte_size := subarray_len * elem_size;
+        fmt.printf("Array byte size: %v; subarray_len: %v; elem_size: %v\n", array_byte_size, subarray_len, elem_size);
+        value_data_ptr  := rawptr(uintptr(val.data) + uintptr(whole_size));
+        value_data_buff, err := mem.alloc(cast(int)array_byte_size, type_info_of(element_id).align)
+        if err != .None do return .InternalAllocationError; // todo fix leakage if error'd
+        value_data_ptr = &runtime.Raw_Slice {
+            data = value_data_buff,
+            len  = cast(int)subarray_len,
+        };
+
+        // read the subarray
+        //>>>NOTE: this makes more indexable arrays/slices/dyn_arrays unreachable because we do not know the "pure" size of the data slice for each subarray...
+        deserialize(
+            any { value_data_ptr, element_id, },
+            data[whole_size : whole_size + array_byte_size],
+        ) or_return;
+
+        whole_size += array_byte_size;
+        fmt.printf("Whole size update: %v\n", whole_size);
+    }
+    return .None;
+}
+
+interpret_bytes_to_array :: proc(val: any, info: runtime.Type_Info_Array, data: []byte) -> (err: Marshall_Error) {
+    if info.count > 0 {
+        #partial switch v in info.elem.variant {
+            // for indexable types, check first 4 bytes
+            case runtime.Type_Info_String:
+                fmt.printf("Type: %v\n", info.elem.id)
+                return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)info.count, info.elem.id, data);
+
+            case runtime.Type_Info_Array:
+                fmt.printf("Type: %v\n", info.elem.id)
+                return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)info.count, info.elem.id, data);
+
+            case runtime.Type_Info_Slice:
+                fmt.printf("Type: %v\n", info.elem.id)
+                return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)info.count, info.elem.id, data);
+
+            case runtime.Type_Info_Dynamic_Array:
+                fmt.printf("Type: %v\n", info.elem.id)
+                return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)info.count, info.elem.id, data);
+
+            case:
+                fmt.printf("Type: %v\n", info.elem.id)
+                for i in 0..<info.count {
+                    deserialize(
+                        any { rawptr(uintptr(val.data) + uintptr(i * info.elem_size)), info.elem.id },
+                        data[i * info.elem_size : (i + 1) * info.elem_size],
+                    ) or_return;
+                }
+                return .None;
+        }
+    }
+    return .ArraySizeMismatch;
+}
+
+interpret_bytes_to_enum_array :: #force_inline proc(val: any, info: runtime.Type_Info_Enumerated_Array, data: []byte) -> (err: Marshall_Error) {
+    return interpret_bytes_to_array(
+        val, 
+        {
+            elem = info.elem,
+            elem_size = info.elem_size,
+            count = info.count,
+        }, 
+        data,
+    );
+}
+
+interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: []byte) -> (err: Marshall_Error) {
+    slice := cast(^runtime.Raw_Slice)val.data;
+
+    if slice.len == 0 { // slice not preallocated by the user
+        slice_len: u32 = 0;
+        interpret_bytes_to_int_data(slice_len, data[:4]) or_return;
+        if slice_len == 0 do return .ArraySizeMismatch;
+        slice.len = cast(int)slice_len;
+        slice_data, err := runtime.mem_alloc_bytes(len(data) - 4, info.elem.align);
+        if err != .None do return .InternalAllocationError;
+        slice.data = raw_data(slice_data);
+    } else {
+        fmt.printf("Slice length deduced! [%v]\n", slice.len);
+    }
+
+    #partial switch v in info.elem.variant {
+        case runtime.Type_Info_String:
+            fmt.printf("Type: %v\n", info.elem.id)
+            return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)slice.len, info.elem.id, data[4:]);
+
+        case runtime.Type_Info_Array:
+            fmt.printf("Type: %v\n", info.elem.id)
+            return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)slice.len, info.elem.id, data[4:]);
+
+        case runtime.Type_Info_Slice:
+            fmt.printf("Type: %v\n", info.elem.id)
+            return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)slice.len, info.elem.id, data[4:]);
+
+        case runtime.Type_Info_Dynamic_Array:
+            fmt.printf("Type: %v\n", info.elem.id)
+            return _interpret_bytes_to_array_with_indexable_elements(val, cast(u32)slice.len, info.elem.id, data[4:]);
+
+        case:
+            for i := 0; i < slice.len; i += 1 {
+                // fmt.printf("Deserialization of elem [nth: %d][type: %v] begins...\n", i, type_info_of(type_of(runtime.Type_Info_Pointer { info.elem })));
+                deserialize(
+                    any {
+                        data = rawptr(uintptr(slice.data) + uintptr(i * info.elem_size)),
+                        id = info.elem.id,
+                    },
+                    data[4 + i * info.elem_size : 4 + (i + 1) * info.elem_size],
+                ) or_return;
+            }
+            return .None;
+    }
+
+    return .UnknownError;
+}
+interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_Array, data: []byte) -> (err: Marshall_Error) {
+    dyn_array := cast(^runtime.Raw_Dynamic_Array)val.data;
+    if dyn_array.len == 0 { // dyn_array not preallocated by the user
+        dyn_array.len = len(data) / info.elem_size;
+        dyn_array.cap = dyn_array.len;
+        dyn_array_data, err := runtime.mem_alloc_bytes(dyn_array.len, info.elem.align);
+        if err != .None do return .InternalAllocationError;
+        dyn_array.data = raw_data(dyn_array_data);
+        dyn_array.allocator = context.allocator;
+    }
+    for i in 0..<dyn_array.len {
+        deserialize(
+            any {
+                data = rawptr(uintptr(dyn_array.data) + uintptr(i * info.elem_size)),
+                id = info.elem.id,
+            },
+            data[i * info.elem_size : (i + 1) * info.elem_size],
+        ) or_return;
+    }
+    return .None;
+}
+/*! ARRAY */
 
 MARSHALL_ANY :: #force_inline proc(variable: $T) -> any 
     where intrinsics.type_is_pointer(T)
@@ -687,93 +836,120 @@ MARSHALL_ANY :: #force_inline proc(variable: $T) -> any
 deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
     type_info := runtime.type_info_base(type_info_of(val.id));
 
-    #partial switch vp in type_info.variant {
-        case runtime.Type_Info_Pointer: // type has to be pointer (in order to be able to write inside it)
-            switch v in vp.elem.variant {
-                case runtime.Type_Info_Named: 
-                    return .UnknownError;
-                case runtime.Type_Info_Integer:
-                    if v.endianness == .Big do return interpret_bytes_to_int_be_data(val, data);
-                    else if v.endianness == .Little do return interpret_bytes_to_int_le_data(val, data);
-                    else do return interpret_bytes_to_int_data(val, data);
-                case runtime.Type_Info_Rune:
-                    return interpret_bytes_to_int_data(
-                        any {
-                            val.data,
-                            typeid_of(^i32),
-                        }, data
-                    );
-                case runtime.Type_Info_Float:
-                    if v.endianness == .Big do return interpret_bytes_to_float_be_data(val, data);
-                    else if v.endianness == .Little do return interpret_bytes_to_float_le_data(val, data);
-                    else do return interpret_bytes_to_int_data(val, data);
-                case runtime.Type_Info_Complex: // todo
-                    return .InvalidType;
-                case runtime.Type_Info_Quaternion: // todo
-                    return .InvalidType;
-                case runtime.Type_Info_String:
-                    switch _ in val {
-                        case ^string:
-                            err: Marshall_Error;
-                            string_data := cast(^string)val.data;
-                            string_data^, err = interpret_bytes_to_string(data);
-                            return err;
-                        case ^cstring:
-                            err: Marshall_Error;
-                            string_data := cast(^cstring)val.data;
-                            string_data^, err = interpret_bytes_to_cstring(data);
-                            return err;
-                    }
-                case runtime.Type_Info_Boolean:
-                    value_data := cast(^bool)val.data;
-                    if data[0] == 1 do value_data^ = true;
-                    else if data[0] == 0 do value_data^ = false;
-                    else do return .TypeMismatch; // cannot be a boolean
-                    return .None;
-                case runtime.Type_Info_Any:
-                    return .InvalidType;
-                case runtime.Type_Info_Type_Id:
-                    return .InvalidType;
-                case runtime.Type_Info_Pointer:
-                    return .InvalidType;
-                case runtime.Type_Info_Multi_Pointer:
-                    return .InvalidType;
-                case runtime.Type_Info_Procedure:
-                    return .InvalidType;
-                case runtime.Type_Info_Array:
-                    return .InvalidType;
-                case runtime.Type_Info_Enumerated_Array:
-                    return .InvalidType;
-                case runtime.Type_Info_Dynamic_Array:
-                    return .InvalidType;
-                case runtime.Type_Info_Slice:
-                    return .InvalidType;
-                case runtime.Type_Info_Parameters:
-                    return .InvalidType;
-                case runtime.Type_Info_Struct:
-                    return .InvalidType;
-                case runtime.Type_Info_Union:
-                    return .InvalidType;
-                case runtime.Type_Info_Enum:
-                    return .InvalidType;
-                case runtime.Type_Info_Map:
-                    return .InvalidType;
-                case runtime.Type_Info_Bit_Set:
-                    return .InvalidType;
-                case runtime.Type_Info_Simd_Vector:
-                    return .InvalidType;
-                case runtime.Type_Info_Relative_Pointer:
-                    return .InvalidType;
-                case runtime.Type_Info_Relative_Multi_Pointer:
-                    return .InvalidType;
-                case runtime.Type_Info_Matrix:
-                    return .InvalidType;
-                case runtime.Type_Info_Soa_Pointer:
-                    return .InvalidType;
+    switch v in type_info.variant {
+        case runtime.Type_Info_Named: 
+            return .UnknownError;
+
+        case runtime.Type_Info_Integer:
+            if v.endianness == .Big do return interpret_bytes_to_int_be_data(val, data);
+            else if v.endianness == .Little do return interpret_bytes_to_int_le_data(val, data);
+            else do return interpret_bytes_to_int_data(val, data);
+
+        case runtime.Type_Info_Rune:
+            return interpret_bytes_to_int_data(
+                any {
+                    val.data,
+                    typeid_of(i32),
+                }, data
+            );
+
+        case runtime.Type_Info_Float:
+            if v.endianness == .Big do return interpret_bytes_to_float_be_data(val, data);
+            else if v.endianness == .Little do return interpret_bytes_to_float_le_data(val, data);
+            else do return interpret_bytes_to_int_data(val, data);
+
+        case runtime.Type_Info_Complex: // todo
+            return .InvalidType;
+
+        case runtime.Type_Info_Quaternion: // todo
+            return .InvalidType;
+
+        case runtime.Type_Info_String:
+            switch &string_data in val {
+                case string:
+                    err: Marshall_Error;
+                    string_data, err = interpret_bytes_to_string(data);
+                    return err;
+                case cstring:
+                    err: Marshall_Error;
+                    string_data, err = interpret_bytes_to_cstring(data);
+                    return err;
             }
 
-        case:
-            return .UnknownError;
+        case runtime.Type_Info_Boolean:
+            value_data := cast(^bool)val.data;
+            if data[0] == 1 do value_data^ = true;
+            else if data[0] == 0 do value_data^ = false;
+            else do return .TypeMismatch; // cannot be a boolean
+            return .None;
+
+        case runtime.Type_Info_Any:
+            return .InvalidType;
+
+        case runtime.Type_Info_Type_Id:
+            return .InvalidType;
+
+        case runtime.Type_Info_Pointer:
+            return deserialize(
+                any { data = val.data, id = v.elem.id, },
+                data
+            );
+
+        case runtime.Type_Info_Multi_Pointer:
+            return .InvalidType;
+
+        case runtime.Type_Info_Procedure:
+            return .InvalidType;
+
+        case runtime.Type_Info_Array:
+            fmt.println("hellope array");
+            return interpret_bytes_to_array(val, v, data);
+
+        case runtime.Type_Info_Enumerated_Array:
+            fmt.println("hellope enum array");
+            return interpret_bytes_to_enum_array(val, v, data);
+
+        case runtime.Type_Info_Dynamic_Array:
+            fmt.println("hellope dyn array");
+            return interpret_bytes_to_dyn_array(val, v, data);
+
+        case runtime.Type_Info_Slice:
+            fmt.println("hellope slice");
+            return interpret_bytes_to_slice(val, v, data);
+
+        case runtime.Type_Info_Parameters:
+            return .InvalidType;
+
+        case runtime.Type_Info_Struct:
+            // note: have to account for "pointers" as members of the struct (in case of recursive calling of the 'deserialize' proc...)
+            return .InvalidType;
+
+        case runtime.Type_Info_Union:
+            return .InvalidType;
+
+        case runtime.Type_Info_Enum:
+            return .InvalidType;
+
+        case runtime.Type_Info_Map:
+            return .InvalidType;
+
+        case runtime.Type_Info_Bit_Set:
+            return .InvalidType;
+
+        case runtime.Type_Info_Simd_Vector:
+            return .InvalidType;
+
+        case runtime.Type_Info_Relative_Pointer:
+            return .InvalidType;
+
+        case runtime.Type_Info_Relative_Multi_Pointer:
+            return .InvalidType;
+
+        case runtime.Type_Info_Matrix:
+            return .InvalidType;
+
+        case runtime.Type_Info_Soa_Pointer:
+            return .InvalidType;
     }
     return .UnknownError;
 }
