@@ -11,7 +11,7 @@ import "core:unicode/utf8"
 import "core:reflect"
 import "core:strings"
 
-import "../../../binary"
+import binary "../"
 
 Marshall_Error :: enum {
     None,                // no error

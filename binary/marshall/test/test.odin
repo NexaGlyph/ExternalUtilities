@@ -4,6 +4,8 @@ package test
 import "base:intrinsics"
 
 import "core:fmt"
+import "core:strings"
+import "core:io"
 import "core:math/rand"
 
 import marshall "../"
@@ -168,7 +170,7 @@ test_arrays :: proc() {
         defer delete(byte_data);
         assert(err == .None);
         assert(len(byte_data) == len(slice) * size_of(E));
-        marshalled: $T = {};
+        marshalled: T = {};
         err = marshall.deserialize(marshall.MARSHALL_ANY(&marshalled), byte_data);
         assert(err == .None);
         if !intrinsics.type_is_struct(E) {
@@ -183,7 +185,7 @@ test_arrays :: proc() {
         defer delete(byte_data);
         assert(err == .None);
         assert(len(byte_data) == len(dyn_array) * size_of(E));
-        marshalled: $T = {};
+        marshalled: T = {};
         err = marshall.deserialize(marshall.MARSHALL_ANY(&marshalled), byte_data);
         assert(err == .None);
         if !intrinsics.type_is_struct(E) {
@@ -198,7 +200,7 @@ test_arrays :: proc() {
         defer delete(byte_data);
         assert(err == .None);
         assert(len(byte_data) == len(dyn_array) * size_of(E));
-        marshalled: $T = {};
+        marshalled: T = {};
         err = marshall.deserialize(marshall.MARSHALL_ANY(&marshalled), byte_data);
         assert(err == .None);
         if !intrinsics.type_is_struct(E) {
@@ -217,30 +219,27 @@ test_arrays :: proc() {
     }
     {
         slice := make([]string, 10);
+        str_builder: strings.Builder;
+        err: io.Error;
         for i in 0..<10 {
-            for j in 0..<rand.int_max(100) {
-                slice[i][j] = cast(rune)rand.int31();
+            strings.builder_init_len(&str_builder, rand.int_max(100));
+            for j in 0..<strings.builder_len(str_builder) {
+                _, err = strings.write_rune(&str_builder, cast(rune)rand.int31());
+                assert(err == .None);
             }
+            slice[i] = strings.to_string(str_builder);
+            strings.builder_destroy(&str_builder);
             fmt.printf("String generated: %s", slice[i]);
         }
         test_slices(slice, #procedure);
         delete(slice);
     }
-    {
-        SliceTestStruct :: struct {
-            val1: int,
-            val2: #type enum { _0, _1, _2, _3, _4, _5 },
-            val3: string,
-        }
-        slice := make([]SliceTestStruct, 10);
-        // todo
-        // test_slices(slice, #procedure);
-        delete(slice);
-    }
 
     {
+        assert(false, "TODO dyn arrays test");
     }
     {
+        assert(false, "TODO fixed size arrays test");
     }
 }
 
