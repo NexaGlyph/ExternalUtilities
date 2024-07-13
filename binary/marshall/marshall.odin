@@ -13,7 +13,7 @@ import "core:strings"
 
 import binary "../"
 
-Marshall_Error :: enum {
+Marshall_Error :: enum u8 {
     None,                           // no error
 
     InvalidType,                    // unsupported type for marshalling/unmarshalling
@@ -191,23 +191,30 @@ interpret_array :: proc(arr: any, v: runtime.Type_Info_Array) -> (byte_data: []b
 interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct) -> (byte_data: []byte, err: Marshall_Error) {
 
     StructTempData :: struct {
-        data: [^]byte,
         offset: int,
+        data: [^]byte,
     }
 
     byte_data_temp := make_dynamic_array_len([dynamic]StructTempData, len(v.offsets));
     byte_data_size_final := u32(0);
     for offset, index in v.offsets {
-        if v.tags[index] == "NexaTag_Marshallable" {
-            byte_array := serialize(uintptr(base_data.data) + offset) or_return;
+        // note: leave this "NexaTag_Marshallable" later, when "meta" package will be supported...
+        // if v.tags[index] == "NexaTag_Marshallable" {
+            // note: these "offsets" are not quite good because of "indexable" types and pointers!!!
+            fmt.println("Before serialize");
+            // byte_array := serialize(uintptr(base_data.data) + offset) or_return;
+            byte_array, s_err := serialize(uintptr(base_data.data) + offset);
+            fmt.printf("%v; %v\n", s_err, v.types[index]);
+            fmt.println("After serialize");
             defer delete(byte_array);
             append(&byte_data_temp, StructTempData{ 
                 data = intrinsics.alloca(len(byte_array), align_of(byte)),
                 offset = int(offset),
             });
             mem.copy(byte_data_temp[index].data, raw_data(byte_array), len(byte_array));
+            fmt.printf("\t%v :: %v\n", byte_data_temp[index].data, byte_array);
             byte_data_size_final += u32(len(byte_array));
-        }
+        // }
     }
     byte_data = make([]byte, byte_data_size_final);
     prev_pos := 0;
@@ -227,157 +234,152 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
     type_info := runtime.type_info_base(type_info_of(data.id));
 	base_data := any{data.data, type_info.id}
 
-    if reflect.is_struct(type_info) {
-        fmt.println("Type is struct!");
-        return nil, .None;
-    } else {
-        switch v in type_info.variant {
-            case runtime.Type_Info_Named: 
-                return nil, .UnknownError;
+    switch v in type_info.variant {
+        case runtime.Type_Info_Named: 
+            return nil, .UnknownError;
 
-            case runtime.Type_Info_Integer:
-                switch integer_data in base_data {
-                    case i8:      return interpret_int_data(integer_data), .None;
-                    case i16:     return interpret_int_data(integer_data), .None;
-                    case i32:     return interpret_int_data(integer_data), .None;
-                    case i64:     return interpret_int_data(integer_data), .None;
-                    case int: {
-                        data := interpret_int_data(integer_data);
-                        // fmt.printf("Interpreted data [%v] into [%v]\n", integer_data, data);
-                        return data, .None;
-                    }
-                    case u8:      return interpret_int_data(integer_data), .None;
-                    case u16:     return interpret_int_data(integer_data), .None;
-                    case u32:     return interpret_int_data(integer_data), .None;
-                    case u64:     return interpret_int_data(integer_data), .None;
-                    case uint:    return interpret_int_data(integer_data), .None;
-
-                    case i16le:   return interpret_int_le_data(integer_data), .None;
-                    case i32le:   return interpret_int_le_data(integer_data), .None;
-                    case i64le:   return interpret_int_le_data(integer_data), .None;
-                    case u16le:   return interpret_int_le_data(integer_data), .None;
-                    case u32le:   return interpret_int_le_data(integer_data), .None;
-                    case u64le:   return interpret_int_le_data(integer_data), .None;
-
-                    case i16be:   return interpret_int_be_data(integer_data), .None;
-                    case i32be:   return interpret_int_be_data(integer_data), .None;
-                    case i64be:   return interpret_int_be_data(integer_data), .None;
-                    case u16be:   return interpret_int_be_data(integer_data), .None;
-                    case u32be:   return interpret_int_be_data(integer_data), .None;
-                    case u64be:   return interpret_int_be_data(integer_data), .None;
-
-                    case i128:    return nil, .InvalidType;
-                    case u128:    return nil, .InvalidType;
-                    case u128le:  return nil, .InvalidType;
-                    case u128be:  return nil, .InvalidType;
-                    case uintptr: return nil, .InvalidType;
+        case runtime.Type_Info_Integer:
+            switch integer_data in base_data {
+                case i8:      return interpret_int_data(integer_data), .None;
+                case i16:     return interpret_int_data(integer_data), .None;
+                case i32:     return interpret_int_data(integer_data), .None;
+                case i64:     return interpret_int_data(integer_data), .None;
+                case int: {
+                    data := interpret_int_data(integer_data);
+                    // fmt.printf("Interpreted data [%v] into [%v]\n", integer_data, data);
+                    return data, .None;
                 }
+                case u8:      return interpret_int_data(integer_data), .None;
+                case u16:     return interpret_int_data(integer_data), .None;
+                case u32:     return interpret_int_data(integer_data), .None;
+                case u64:     return interpret_int_data(integer_data), .None;
+                case uint:    return interpret_int_data(integer_data), .None;
 
-            case runtime.Type_Info_Rune:
-                return interpret_int_data(cast(i32)base_data.(rune)), .None;
+                case i16le:   return interpret_int_le_data(integer_data), .None;
+                case i32le:   return interpret_int_le_data(integer_data), .None;
+                case i64le:   return interpret_int_le_data(integer_data), .None;
+                case u16le:   return interpret_int_le_data(integer_data), .None;
+                case u32le:   return interpret_int_le_data(integer_data), .None;
+                case u64le:   return interpret_int_le_data(integer_data), .None;
 
-            case runtime.Type_Info_Float:
-                switch float_data in base_data {
-                    // case f16: return interpret_float_data(float_data), .None;
-                    // case f32: return interpret_float_data(float_data), .None;
-                    // case f64: return interpret_float_data(float_data), .None;
+                case i16be:   return interpret_int_be_data(integer_data), .None;
+                case i32be:   return interpret_int_be_data(integer_data), .None;
+                case i64be:   return interpret_int_be_data(integer_data), .None;
+                case u16be:   return interpret_int_be_data(integer_data), .None;
+                case u32be:   return interpret_int_be_data(integer_data), .None;
+                case u64be:   return interpret_int_be_data(integer_data), .None;
 
-                    case f16le: return interpret_float_le_data(float_data), .None;
-                    case f32le: return interpret_float_le_data(float_data), .None;
-                    case f64le: return interpret_float_le_data(float_data), .None;
+                case i128:    return nil, .InvalidType;
+                case u128:    return nil, .InvalidType;
+                case u128le:  return nil, .InvalidType;
+                case u128be:  return nil, .InvalidType;
+                case uintptr: return nil, .InvalidType;
+            }
 
-                    case f16be: return interpret_float_be_data(float_data), .None;
-                    case f32be: return interpret_float_be_data(float_data), .None;
-                    case f64be: return interpret_float_be_data(float_data), .None;
-                }
+        case runtime.Type_Info_Rune:
+            return interpret_int_data(cast(i32)base_data.(rune)), .None;
 
-            case runtime.Type_Info_Complex: // todo
-                return nil, .InvalidType;
+        case runtime.Type_Info_Float:
+            switch float_data in base_data {
+                // case f16: return interpret_float_data(float_data), .None;
+                // case f32: return interpret_float_data(float_data), .None;
+                // case f64: return interpret_float_data(float_data), .None;
 
-            case runtime.Type_Info_Quaternion: // todo
-                return nil, .InvalidType;
+                case f16le: return interpret_float_le_data(float_data), .None;
+                case f32le: return interpret_float_le_data(float_data), .None;
+                case f64le: return interpret_float_le_data(float_data), .None;
 
-            case runtime.Type_Info_String:
-                switch string_data in base_data {
-                    case string:  return interpret_string(string_data);
-                    case cstring: return interpret_string_null_terminated(string_data);
-                }
+                case f16be: return interpret_float_be_data(float_data), .None;
+                case f32be: return interpret_float_be_data(float_data), .None;
+                case f64be: return interpret_float_be_data(float_data), .None;
+            }
 
-            case runtime.Type_Info_Boolean:
-                // we are going to treat boolean as just u8(0) or u8(1)
-                return interpret_int_data(base_data.(bool) == true ? u8(1) : u8(0)), .None;
+        case runtime.Type_Info_Complex: // todo
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Any:
-                fmt.println("\x1b[32mIf you wanted to write 'any', you may try to set 'forced' to true\x1b[0m");
-                return nil, .InvalidType;
+        case runtime.Type_Info_Quaternion: // todo
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Type_Id:
-                return nil, .InvalidType;
+        case runtime.Type_Info_String:
+            switch string_data in base_data {
+                case string:  return interpret_string(string_data);
+                case cstring: return interpret_string_null_terminated(string_data);
+            }
 
-            case runtime.Type_Info_Pointer: // todo
-                return serialize(base_data.data);
+        case runtime.Type_Info_Boolean:
+            // we are going to treat boolean as just u8(0) or u8(1)
+            return interpret_int_data(base_data.(bool) == true ? u8(1) : u8(0)), .None;
 
-            case runtime.Type_Info_Multi_Pointer: // todo, do not forget to write its size
-                return nil, .InvalidType;
+        case runtime.Type_Info_Any:
+            fmt.println("\x1b[32mIf you wanted to write 'any', you may try to set 'forced' to true\x1b[0m");
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Procedure:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Type_Id:
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Array:
-                return interpret_array(base_data, v);
+        case runtime.Type_Info_Pointer: // todo
+            return serialize(base_data.data);
 
-            case runtime.Type_Info_Enumerated_Array: // todo
-                return nil, .InvalidType;
+        case runtime.Type_Info_Multi_Pointer: // todo, do not forget to write its size
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Dynamic_Array: // todo
-                dyn_arr := cast(^runtime.Raw_Dynamic_Array)base_data.data;
-                if dyn_arr.len > 0 do return interpret_array(base_data, {
-                    v.elem,
-                    v.elem_size,
-                    dyn_arr.len,
-                });
+        case runtime.Type_Info_Procedure:
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Slice: // todo
-                slice := cast(^runtime.Raw_Slice)base_data.data;
-                if slice.len > 0 do return interpret_array(base_data, {
-                    v.elem,
-                    v.elem_size,
-                    slice.len,
-                });
+        case runtime.Type_Info_Array:
+            return interpret_array(base_data, v);
 
-            case runtime.Type_Info_Parameters:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Enumerated_Array: // todo
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Struct:
-                return interpret_struct(base_data, v);
+        case runtime.Type_Info_Dynamic_Array: // todo
+            dyn_arr := cast(^runtime.Raw_Dynamic_Array)base_data.data;
+            if dyn_arr.len > 0 do return interpret_array(base_data, {
+                v.elem,
+                v.elem_size,
+                dyn_arr.len,
+            });
 
-            case runtime.Type_Info_Union:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Slice: // todo
+            slice := cast(^runtime.Raw_Slice)base_data.data;
+            if slice.len > 0 do return interpret_array(base_data, {
+                v.elem,
+                v.elem_size,
+                slice.len,
+            });
 
-            case runtime.Type_Info_Enum: // todo
-                return serialize({ base_data.data, v.base.id });
+        case runtime.Type_Info_Parameters:
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Map:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Struct:
+            return interpret_struct(base_data, v);
 
-            case runtime.Type_Info_Bit_Set:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Union:
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Simd_Vector:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Enum: // todo
+            return serialize({ base_data.data, v.base.id });
 
-            case runtime.Type_Info_Relative_Pointer:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Map:
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Relative_Multi_Pointer:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Bit_Set:
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Matrix:
-                return nil, .InvalidType;
+        case runtime.Type_Info_Simd_Vector:
+            return nil, .InvalidType;
 
-            case runtime.Type_Info_Soa_Pointer:
-                return nil, .InvalidType;
-        }
+        case runtime.Type_Info_Relative_Pointer:
+            return nil, .InvalidType;
+
+        case runtime.Type_Info_Relative_Multi_Pointer:
+            return nil, .InvalidType;
+
+        case runtime.Type_Info_Matrix:
+            return nil, .InvalidType;
+
+        case runtime.Type_Info_Soa_Pointer:
+            return nil, .InvalidType;
     }
     return nil, .UnknownError;
 }
@@ -830,6 +832,25 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
     return .None;
 }
 /*! ARRAY */
+/* STRUCT */
+interpret_bytes_to_struct :: proc(val: any, v: runtime.Type_Info_Struct, data: []byte) -> (err: Marshall_Error) {
+
+    prev_offset: uintptr = 0;
+    for offset, index in v.offsets {
+        deserialize(
+            any {
+                data = rawptr(uintptr(val.data) + offset),
+                id = v.types[index].id,
+            },
+            data[prev_offset : prev_offset + offset],
+        );
+
+        prev_offset += offset;
+    }
+
+    return;
+}
+/*! STRUCT */
 
 MARSHALL_ANY :: #force_inline proc(variable: $T) -> any 
     where intrinsics.type_is_pointer(T)
@@ -931,9 +952,9 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
         case runtime.Type_Info_Parameters:
             return .InvalidType;
 
-        case runtime.Type_Info_Struct:
+        case runtime.Type_Info_Struct: //todo
             // note: have to account for "pointers" as members of the struct (in case of recursive calling of the 'deserialize' proc...)
-            return .InvalidType;
+            return interpret_bytes_to_struct(val, v, data);
 
         case runtime.Type_Info_Union:
             return .InvalidType;
@@ -967,27 +988,30 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
 /**
  * @brief this functions writes binary data of any type "T" such that it creates binary.Writer and its contents using the marshall_write_explicit
  */
-marshall_write :: #force_inline proc(data: $T) -> Marshall_Error {
-    writer := binary.init_writer();
-    return marshall_write_explicit(data, writer);
-    binary.dump_writer(&writer);
+marshall_write :: #force_inline proc(data: $T, path: string) -> Marshall_Error {
+    writer := binary.init_writer(path);
+    defer binary.dump_writer(&writer);
+    return marshall_write_explicit(data, &writer);
 }
 /**
  * @brief this functions writes binary data of any type "T" using binary.Writer, type reflection ensures that pointers and arrays/multi-pointers are written correctly
  */
-marshall_write_explicit :: proc(data: $T, writer: binary.Writer) -> Marshall_Error {
-    binary_data, err := serialize(data); // automatically assume "hideous" types
-    assert(err == .None, "Failed to serialize data!");
-    binary.write_bytes(&writer, binary_data);
-    assert(false, "TODO");
-    return .None;
+marshall_write_explicit :: proc(data: $T, writer: ^binary.Writer) -> (err: Marshall_Error) {
+    binary_data := serialize(data) or_return; // automatically assume "hideous" types
+    defer delete(binary_data);
+    fmt.printf("%v\n", binary_data);
+    binary.write_bytes(writer, binary_data);
+    return;
 }
 
-marshall_read :: proc($T: typeid) -> (T, Marshall_Error) {
-    assert(false, "TODO");
-    return nil, .None;
+marshall_read :: proc($T: typeid, path: string) -> (T, Marshall_Error) {
+    reader := binary.init_reader();
+    binary.load(&reader, path);
+    defer binary.dump_reader(&reader);
+    return marshall_read_explicit(T, reader);
 }
 marshall_read_explicit :: proc($T: typeid, reader: binary.Reader) -> (T, Marshall_Error) {
-    assert(false, "TODO");
-    return nil, .None;
+    val: T;
+    err := deserialize(val, reader.buffer);
+    return val, err;
 }

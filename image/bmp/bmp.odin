@@ -11,8 +11,8 @@ import "../../image"
 import "../utils"
 
 /* ALL OF THE OTHER ERRORS (LIKE IN WRITING) ARE USUALLY CAUGHT WITH THE UITLITY FUNCTIONS AND ARE ASSERTED */
-BMP_Error :: enum {
-    E_NONE,
+BMP_ReadError :: enum u8 {
+    E_NONE = 0,
 
     E_READ_FILE,
     E_READ_UNRECOGNIZED_FILE_SIZE,
@@ -23,6 +23,10 @@ BMP_Error :: enum {
     E_READ_CORRUPTED_DATA,
     E_READ_UNEXPECTED_END_OF_FILE,
     E_READ_INCORRECT_IMAGE_TYPE,
+}
+
+BMP_WriteError :: enum u8 {
+    E_NONE = 0,
 
     E_WRITE_FAILED,
     E_WRITE_INSUFFICIENT_DATA,
@@ -100,7 +104,7 @@ init_palette_gradient :: #force_inline proc($N: int) -> BMP_Palette(N) {
 
 /* BMP WRITE */
 @(require_results)
-bmp_write_auto :: proc(using img: ^image.RawImage, file_path: string) -> BMP_Error {
+bmp_write_auto :: proc(using img: ^image.RawImage, file_path: string) -> BMP_WriteError {
     handle := _bmp_write_begin(file_path);
     writer: io.Writer = os.stream_from_handle(handle);
     defer os.close(handle);
@@ -131,7 +135,7 @@ bmp_write_auto :: proc(using img: ^image.RawImage, file_path: string) -> BMP_Err
     return .E_NONE;
 }
 
-bmp_write_bgr :: proc(using img: ^image.Image2(image.BGR($PixelDataT)), file_path: string) {
+bmp_write_bgr :: proc(using img: ^image.Image2(image.BGR($PixelDataT)), file_path: string) -> (err: BMP_WriteError) {
     handle := _bmp_write_begin(file_path);
     writer: io.Writer = os.stream_from_handle(handle);
     defer os.close(handle);
@@ -149,7 +153,7 @@ bmp_write_bgr :: proc(using img: ^image.Image2(image.BGR($PixelDataT)), file_pat
     bmp_array := _bmp_data_convert(data, size);
     // log.infof("%v", bmp_array);
     defer delete(bmp_array);
-    _bmp_write_data(writer, bmp_array);
+    return _bmp_write_data(writer, size.x, size.y, size_of(PixelDataT), bmp_array);
 }
 
 /*
@@ -193,7 +197,7 @@ _bmp_write_begin :: proc(file_path: string) -> os.Handle {
 
     if ok != os.ERROR_NONE {
         log.errorf("%v", ok);
-        assert(false, "Failed to open file [png] for writing");
+        assert(false, "Failed to open file [bmp] for writing");
     }
 
     return handle;
@@ -370,7 +374,7 @@ _bmp_data_convert :: proc { _bmp_data_convert8, _bmp_data_convert16, _bmp_data_c
 
 @(private="file")
 @(require_results)
-_bmp_write_data :: #force_inline proc(writer: io.Writer, width: u32, height: u32, bytes_per_pixel: u32, data: []u8) -> BMP_Error {
+_bmp_write_data :: #force_inline proc(writer: io.Writer, width: u32, height: u32, bytes_per_pixel: u32, data: []u8) -> BMP_WriteError {
     row_size_with_padding := int((width + 3) / 4) * 4;
     row_size_without_padding := width;
 
@@ -399,7 +403,7 @@ BITMAP_DATA_SIZE :: #force_inline proc(width: i32, height: i32) -> u32 {
 
 /* BMP READ */
 @(require_results)
-bmp_read_bgr_auto :: proc(file_path: string) -> (img: image.RawImage, err: BMP_Error) {
+bmp_read_bgr_auto :: proc(file_path: string) -> (img: image.RawImage, err: BMP_ReadError) {
     handle, ok := os.open(file_path, os.O_RDONLY);
     defer os.close(handle);
 
@@ -457,14 +461,11 @@ bmp_read_bgr_auto :: proc(file_path: string) -> (img: image.RawImage, err: BMP_E
 }
 
 @(require_results)
-bmp_read_bgr8 :: proc(file_path: string) -> (img: image.ImageBGR8, err: BMP_Error) {
+bmp_read_bgr8 :: proc(file_path: string) -> (img: image.ImageBGR8, err: BMP_ReadError) {
     handle, ok := os.open(file_path, os.O_RDONLY);
     defer os.close(handle);
 
-    if ok != os.ERROR_NONE {
-        log.errorf("%v", ok);
-        assert(false, "Failed to open file [bmp] for writing");
-    }
+    if ok != os.ERROR_NONE do return {}, .E_READ_FILE;
     
     reader: io.Reader = os.stream_from_handle(handle);
 
@@ -472,6 +473,7 @@ bmp_read_bgr8 :: proc(file_path: string) -> (img: image.ImageBGR8, err: BMP_Erro
     header := _bmp_read_header(reader, Header_ExpectedValues { BMP_OFFSET }) or_return;
     dib    := _bmp_read_dib(reader, DIB_ExpectedValues { 24 }) or_return;
     data   := _bmp_read_data(reader, auto_cast dib.width, auto_cast dib.height, auto_cast dib.bits_per_pixel/8, Data_ExpectedValues { auto_cast BITMAP_DATA_SIZE(dib.width, dib.height) }) or_return;
+    img.data = make([]image.BGR8, dib.width * dib.height);
     assert(mem.copy(raw_data(img.data), raw_data(data), len(data) * size_of(u8)) != nil, "Failed to copy bitmap data!");
     img.info = image.BGR_UUID | (image.UINT8_UUID << 4);
     img.size = image.IMAGE_SIZE(dib.width, dib.height);
@@ -486,13 +488,13 @@ bmp_read_bgr32 :: proc() -> image.ImageBGR32 {
     return {};
 }
 
-validate_magic :: #force_inline proc "fastcall" (magic: [2]u8) -> BMP_Error {
+validate_magic :: #force_inline proc "fastcall" (magic: [2]u8) -> BMP_ReadError {
     if magic[0] != 'B' || magic[1] != 'M' do return .E_READ_INVALID_FILE_FORMAT;
     return .E_NONE;
 }
 
 @(private="file")
-_bmp_read_magic :: proc(reader: io.Reader) -> BMP_Error {
+_bmp_read_magic :: proc(reader: io.Reader) -> BMP_ReadError {
     magic := [2]u8{};
     io.read(reader, magic[:]);
     return validate_magic(magic);
@@ -503,7 +505,7 @@ Header_ExpectedValues :: struct {
 }
 
 @(private="file")
-_bmp_read_header :: proc(reader: io.Reader, expected: Header_ExpectedValues) -> (bmpfile_header, BMP_Error) {
+_bmp_read_header :: proc(reader: io.Reader, expected: Header_ExpectedValues) -> (bmpfile_header, BMP_ReadError) {
     header_binary := make([]u8, size_of(bmpfile_header));
     defer delete(header_binary);
 
@@ -530,7 +532,7 @@ DIB_ExpectedValues :: struct {
 }
 
 @(private="file")
-_bmp_read_dib :: proc(reader: io.Reader, expected: DIB_ExpectedValues) -> (bmpfile_dib_info, BMP_Error) {
+_bmp_read_dib :: proc(reader: io.Reader, expected: DIB_ExpectedValues) -> (bmpfile_dib_info, BMP_ReadError) {
     dib_binary := make([]u8, size_of(bmpfile_dib_info));
     defer delete(dib_binary);
 
@@ -576,7 +578,7 @@ _bmp_read_dib :: proc(reader: io.Reader, expected: DIB_ExpectedValues) -> (bmpfi
 }
 
 @(private="file")
-_bmp_read_palette :: proc(reader: io.Reader, $N: int) -> ([N]BMP_PaletteEntry, BMP_Error) {
+_bmp_read_palette :: proc(reader: io.Reader, $N: int) -> ([N]BMP_PaletteEntry, BMP_ReadError) {
     data: [N * 4]u8 = {}; 
     len, err := io.read(reader, data[:]);
     if len != N * 4 do return {}, .E_READ_UNEXPECTED_END_OF_FILE;
@@ -592,7 +594,7 @@ Data_ExpectedValues :: struct {
 }
 
 @(private="file")
-_bmp_read_data :: proc(reader: io.Reader, width: u32, height: u32, bytes_per_pixel: u32, expected: Data_ExpectedValues) -> ([]u8, BMP_Error) {
+_bmp_read_data :: proc(reader: io.Reader, width: u32, height: u32, bytes_per_pixel: u32, expected: Data_ExpectedValues) -> ([]u8, BMP_ReadError) {
 
     row_size_with_padding := int((width * bytes_per_pixel + 3) / 4) * 4;
     row_size_without_padding := width * bytes_per_pixel;

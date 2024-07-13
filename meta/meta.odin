@@ -6,60 +6,182 @@ import "core:os"
 
 import "core:odin/parser"
 import "core:odin/ast"
+// import "core:reflect"
 
 main :: proc() {
-    check_file_contents("meta_test/sample.odin");
+    check_file_contents("meta_test/sample_inline.odin");
 }
 
 check_file_contents :: proc(file_name: string) {
     p := parser.Parser{};
-    file, ok := os.read_entire_file_from_filename(file_name);
-    defer delete(file);
-    if !ok {
-        fmt.println("Failed to read file!");
+    handle, err := os.open(file_name, os.O_RDONLY);
+    if err != os.ERROR_NONE {
+        fmt.printf("Failed to read file! [Err: %v]\n", err);
+        return;
+    }
+    _len: i64;
+    _len, err = os.file_size(handle);
+    if err != os.ERROR_NONE {
+        fmt.printf("Failed to determine file size! [Err: %v]\n", err);
+        return;
+    }
+    file_buffer := make([]u8, _len);
+    defer delete(file_buffer);
+    read_len: int;
+    read_len, err = os.read_full(handle, file_buffer);
+    assert(os.close(handle) == os.ERROR_NONE);
+    assert(cast(i64)read_len == _len);
+    if err != os.ERROR_NONE {
+        fmt.printf("Failed to read file buffer! [Err: %v]\n", err);
         return;
     }
     ast_file := ast.File{
-        src = string(file),
+        src = string(file_buffer),
         fullpath = file_name,
     };
+    ok := false;
 
     if ok = parser.parse_file(&p, &ast_file); !ok {
         fmt.println("Failed to parse file!");
         return;
     }
 
+    // for inlined procs
+    proc_inline_indices := make([dynamic]int);
+    defer delete(proc_inline_indices);
+    // for application entry point
+    app_entry := false;
+
     for decl in ast_file.decls {
         #partial switch d in decl.derived {
             case ^ast.Value_Decl:
                 for attribute in d.attributes {
                     expr_loop: for expr in attribute.elems {
-                        field_value, ok := expr.derived.(^ast.Field_Value);
-                        fmt.printf("Parsing: %s\n", string(file[field_value.pos.offset:field_value.end.offset]));
-                        if !ok do break expr_loop;
+                        field_value: ^ast.Field_Value;
+                        field_value, ok = expr.derived.(^ast.Field_Value);
+                        if !ok {
+                            ident: ^ast.Ident;
+                            ident, ok = expr.derived.(^ast.Ident);
+                            if !ok do break expr_loop;
+                            fmt.printf("Ident name: %s\n", ident.name);
+                            switch ident.name {
+                                /**
+                                * @brief automatically assumes "internal" ident, see NexaAttr_APICall below
+                                */
+                                case "NexaAttr_APICall":
+                                    assert(false, "TODO");
+                                /**
+                                * @brief this attribute tells meta to treat the proc as only defined in Debug modes (Debug/DebugX)
+                                */
+                                case "NexaAttr_DebugOnly":
+                                    assert(false, "TODO");
+                                /**
+                                * @brief marks function to be called from application (main) thread
+                                */
+                                case "NexaAttr_MainThreadOnly":
+                                    assert(false, "TODO");
+                                /**
+                                * @brief should be defined on a procedure that has main app loop in it
+                                */
+                                case "NexaAttr_ApplicationEntry":
+                                    if app_entry do assert(false, "Can be only one app entry!");
+                                    app_entry = true;
+                                    app_entry_check(decl, file_buffer);
+                                /**
+                                * @brief marks function to be "inlined" (same as #force_inline)
+                                */
+                                case "NexaAttr_Inline":
+                                    index := proc_inline(decl);
+                                    assert(index != 0);
+                                    append(&proc_inline_indices, index);
+                                // ignore all others
+                            }
+                            break expr_loop;
+                        }
+                        fmt.printf("Parsing: %s\n", ast_file.src[field_value.pos.offset:field_value.end.offset]);
                         ///
                         ident: ^ast.Ident;
                         ident, ok = field_value.field.derived_expr.(^ast.Ident);
                         if !ok do break expr_loop;
                         fmt.printf("Ident name: %s\n", ident.name);
                         ///
-                        if file[field_value.sep.offset] != 61 /* "=" */ do break expr_loop;
-                        ///
-                        lit: ^ast.Basic_Lit;
-                        lit, ok = field_value.value.derived_expr.(^ast.Basic_Lit);
-                        if !ok do break expr_loop;
-                        fmt.printf("Basic lit token: %s\n", lit.tok.text);
-                        
-                        switch ident.name {
-                            case "NexaAttr_PrivateMember":
-                                assert(false, "TODO");
-                                break;
-                            // ignore all others
+                        if ast_file.src[field_value.sep.offset] == 61 /* "=" */ {
+                            ///
+                            lit: ^ast.Basic_Lit;
+                            lit, _ = field_value.value.derived_expr.(^ast.Basic_Lit);
+                            fmt.printf("Basic lit token: %s\n", lit.tok.text);
+                            switch ident.name {
+                                /**
+                                * @brief this attribute tells meta to error on any access of the specified member outisde NexaAttr_APICall
+                                */
+                                case "NexaAttr_PrivateMember":
+                                    assert(false, "TODO");
+                                /**
+                                * @brief this should signify that the call comes from NexaCore, further ident can be specified:
+                                *   1. "internal" ... only NexaCore itself can access this function
+                                *   2. "external" ... can be accessed outside NexaCore
+                                */
+                                case "NexaAttr_APICall":
+                                    assert(false, "TODO");
+                                // ignore all others
+                            }
                         }
                     }
                 }
         }
     }
+
+    prev_len := len(file_buffer);
+    for index in &proc_inline_indices {
+        if index > prev_len / 2 do index += len(file_buffer) - prev_len;
+        file_buffer = insert_into_file_buffer(
+            file_buffer,
+            {35, 102, 111, 114, 99, 101, 95, 105, 110, 108, 105, 110, 101}, 
+            index,
+        );
+    }
+    handle, err = os.open(file_name, os.O_WRONLY);
+    if err != os.ERROR_NONE {
+        fmt.printf("Failed to open file! [Err: %v]\n", err);
+        return;
+    }
+    read_len, err = os.write_string(handle, string(file_buffer));
+    if read_len != len(file_buffer) || err != os.ERROR_NONE {
+        fmt.println("Failed to rewrite file!");
+        return;
+    }
+}
+
+insert_into_file_buffer :: proc(file_buffer: []byte, what: []byte, offset: int) -> []byte {
+    assert(offset > 0 && offset < len(file_buffer));
+
+    new_buffer := make([]byte, len(file_buffer) + offset);
+    copy_slice(new_buffer[:offset], file_buffer[:offset]);
+    copy_slice(new_buffer[offset:offset + len(what)], what);
+    copy_slice(new_buffer[offset + len(what):], file_buffer[offset:]);
+    delete(file_buffer);
+
+    return new_buffer;
+}
+
+// NexaAttr_Inline
+proc_inline :: proc(stmt: ^ast.Stmt) -> int {
+    #partial switch s in stmt.derived {
+        case ^ast.Value_Decl:
+            fmt.printf("%v\n", s);
+            // assert(len(s.names) == 1)
+            // should assume that the name is one since it is a function...
+            // todo
+            ident, ok := s.names[0].derived.(^ast.Ident);
+            return ident.end.offset + 3;
+        case:
+            find_correct_node(s);
+    }
+    return 0;
+}
+
+// NexaAttr_ApplicationEntry
+app_entry_check :: proc(stmt: ^ast.Stmt, buffer: []byte) {
 }
 
 //>>>NOTE: DELETE ON RELEASE

@@ -1,6 +1,6 @@
 package image;
 
-// import "core:mem"
+import "core:mem"
 
 RawImageDescriptor :: ImageInfoUUID;
 
@@ -31,7 +31,7 @@ from_raw_bgr :: #force_inline proc(using img: ^RawImage, $PixelT: typeid) -> (fi
     final_img.size = size;
     final_img.info = info;
     final_img.data = make([]PixelT, size.x * size.y);
-    mem.copy(raw_data(final_img.data), data, size_of(PixelT) * int(size.x * size.y));
+    mem.copy(raw_data(final_img.data), data, int(size.x * size.y));
     return;
 }
 

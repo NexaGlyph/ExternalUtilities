@@ -21,7 +21,7 @@ main :: proc() {
     profiler := performance.init_cpu_timer();
     defer performance.dump_cpu_timer(&profiler);
 
-    log.infof("IMAGE READING");
+    log.infof("IMAGE WRITING");
 
     performance.begin(&profiler);
     {
@@ -74,7 +74,7 @@ main :: proc() {
 
     log.infof("Time taken: %v ms", performance.delta_milliseconds(stamp));
 
-    log.infof("IMAGE WRITING");
+    log.infof("IMAGE READING");
 
     performance.begin(&profiler);
     {
@@ -94,22 +94,22 @@ main :: proc() {
 
     log.infof("Time taken: %v ms", performance.delta_milliseconds(stamp));
 
-    performance.begin(&profiler);
-    {
-        raw_image, err := bmp.bmp_read_bgr_auto("bgr16.bmp");
-        defer image.dump_raw(&raw_image);
-        assert(err == .E_NONE, "FAILED TO READ BITMAP FILE!");
-        assert(raw_image.info & image.IMAGE_INFO_IMAGE_TYPE_UUID_MASK == image.BGR_UUID, "UUID (IMAGE_TYPE) IS INCORRECT");
-        assert(raw_image.info & image.IMAGE_INFO_PIXEL_TYPE_UUID_MASK == (image.UINT16_UUID << 4), "UUID (PIXEL_TYPE) IS INCORRECT");
+    // performance.begin(&profiler);
+    // {
+    //     raw_image, err := bmp.bmp_read_bgr_auto("bgr16.bmp");
+    //     defer image.dump_raw(&raw_image);
+    //     assert(err == .E_NONE, "FAILED TO READ BITMAP FILE!");
+    //     assert(raw_image.info & image.IMAGE_INFO_IMAGE_TYPE_UUID_MASK == image.BGR_UUID, "UUID (IMAGE_TYPE) IS INCORRECT");
+    //     assert(raw_image.info & image.IMAGE_INFO_PIXEL_TYPE_UUID_MASK == (image.UINT16_UUID << 4), "UUID (PIXEL_TYPE) IS INCORRECT");
 
-        img := image.from_raw_bgr(&raw_image, image.BGR16);
-        defer image.dump_image2(&img);
+    //     img := image.from_raw_bgr(&raw_image, image.BGR16);
+    //     defer image.dump_image2(&img);
 
-        bmp.bmp_write_bgr(&img, "bgr16_after_write");
-    }
-    stamp = performance.end(&profiler);
+    //     bmp.bmp_write_bgr(&img, "bgr16_after_write");
+    // }
+    // stamp = performance.end(&profiler);
 
-    log.infof("Time taken: %v ms", performance.delta_milliseconds(stamp));
+    // log.infof("Time taken: %v ms", performance.delta_milliseconds(stamp));
 
     performance.begin(&profiler);
     {
