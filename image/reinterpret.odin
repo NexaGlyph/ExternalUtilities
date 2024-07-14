@@ -13,7 +13,6 @@ reinterpret_pixel_bgr :: #force_inline proc($PixelAfterT: typeid/BGR($OutDataT),
         b = reinterpret_pixel_data(OutDataT, value.b),
         g = reinterpret_pixel_data(OutDataT, value.g),
         r = reinterpret_pixel_data(OutDataT, value.r),
-        x = reinterpret_pixel_data(OutDataT, value.x),
     };
 }
 
@@ -63,6 +62,16 @@ query_sUUID :: proc(OutDataT: typeid) -> ImageInfoUUID {
     return ImageInfoInvalid; 
 }
 
+reinterpret_image_bgr_discard :: proc($ImageAfterT: typeid/Image2(BGR($OutDataT)), $ImageBeforeT: typeid/Image2(BGR($InDataT)), using img: ^ImageBeforeT) -> ImageAfterT {
+    defer delete(data);
+    return reinterpret_image_bgr(ImageAfterT, ImageBeforeT, img);
+}
+
+reinterpret_image_rgba_discard :: proc($ImageAfterT: typeid/Image2(RGBA($OutDataT)), $ImageBeforeT: typeid/Image2(RGBA($InDataT)), using img: ^ImageBeforeT) -> ImageAfterT {
+    defer delete(data);
+    return reinterpret_image_rgba(ImageAfterT, ImageBeforeT, img);
+}
+
 reinterpret_image_bgr :: proc($ImageAfterT: typeid/Image2(BGR($OutDataT)), $ImageBeforeT: typeid/Image2(BGR($InDataT)), using img: ^ImageBeforeT) -> ImageAfterT {
     new_img: ImageAfterT;
     new_img.data = make([]BGR(OutDataT), size.x * size.y);
@@ -70,8 +79,6 @@ reinterpret_image_bgr :: proc($ImageAfterT: typeid/Image2(BGR($OutDataT)), $Imag
     new_img.info = BGR_UUID | (query_uUUID(OutDataT) << 4);
 
     for j in 0..<len(data) do new_img.data[j] = reinterpret_pixel_bgr(BGR(OutDataT), BGR(InDataT), data[j]);
-
-    delete(data);
 
     return new_img;
 }
@@ -83,8 +90,6 @@ reinterpret_image_rgba :: proc($ImageAfterT: typeid/Image2(RGBA($OutDataT)), $Im
     new_img.info = BGR_UUID | (query_uUUID(OutDataT) << 4);
 
     for j in 0..<len(data) do new_img.data[j] = reinterpret_pixel_rgba(RGBA(OutDataT), RGBA(InDataT), data[j]);
-
-    delete(data);
 
     return new_img;
 }

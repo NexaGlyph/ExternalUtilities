@@ -27,11 +27,13 @@ rgba_to_raw :: #force_inline proc "contextless" (using img: ^Image2(RGBA($PixelD
     return;
 }
 
-from_raw_bgr :: #force_inline proc(using img: ^RawImage, $PixelT: typeid) -> (final_img: Image2(PixelT)) { 
+from_raw_bgr :: #force_inline proc(using img: ^RawImage, $PixelT: typeid/BGR($PixelDataT)) -> (final_img: Image2(PixelT)) { 
     final_img.size = size;
     final_img.info = info;
-    final_img.data = make([]PixelT, size.x * size.y);
-    mem.copy(raw_data(final_img.data), data, int(size.x * size.y));
+    final_img.data = transmute([]PixelT)mem.Raw_Slice {
+        data = data,
+        len = int(size.x * size.y),
+    }
     return;
 }
 
