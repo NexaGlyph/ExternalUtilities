@@ -311,7 +311,6 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
             return interpret_int_data(base_data.(bool) == true ? u8(1) : u8(0)), .None;
 
         case runtime.Type_Info_Any:
-            fmt.println("\x1b[32mIf you wanted to write 'any', you may try to set 'forced' to true\x1b[0m");
             return nil, .InvalidType;
 
         case runtime.Type_Info_Type_Id:
@@ -380,10 +379,109 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
 
         case runtime.Type_Info_Soa_Pointer:
             return nil, .InvalidType;
+
+        case runtime.Type_Info_Bit_Field:
+            return nil, .InvalidType;
     }
     return nil, .UnknownError;
 }
 
+/**
+ * @brief calculates the size of the binary buffer that would be returned by 'serialize'
+ * @return length of []byte array; -1 if id of data.id is not supported by the 'serialize' function
+ */
+marshall_serialized_size :: proc(data: any) -> int {
+
+    iterable_size :: #force_inline proc(data: any, count: int) -> int {
+        byte_data_len := 0;
+        for it := 0; it < count; {
+            val, idx, fine := reflect.iterate_array(data, &it);
+            if !fine do break;
+            byte_data_len += marshall_serialized_size(val);
+        }
+        return 8 + byte_data_len;
+    }
+
+    type_info := runtime.type_info_base(type_info_of(data.id));
+    #partial switch v in type_info.variant {
+        case runtime.Type_Info_Integer:
+            switch integer_data in data {
+                case i8:      return 1;
+                case i16:     return 2;
+                case i32:     return 4;
+                case i64:     return 8;
+                case int:     return 8;
+                case u8:      return 1;
+                case u16:     return 2;
+                case u32:     return 4;
+                case u64:     return 8;
+                case uint:    return 8;
+
+                case i16le:   return 2;
+                case i32le:   return 4;
+                case i64le:   return 8;
+                case u16le:   return 2;
+                case u32le:   return 4;
+                case u64le:   return 8;
+
+                case i16be:   return 2;
+                case i32be:   return 4;
+                case i64be:   return 8;
+                case u16be:   return 2;
+                case u32be:   return 4;
+                case u64be:   return 8;
+            }
+
+        case runtime.Type_Info_Rune:
+            return 4;
+
+        case runtime.Type_Info_Float:
+            switch float_data in data {
+                // case f16: return interpret_float_data(float_data), .None;
+                // case f32: return interpret_float_data(float_data), .None;
+                // case f64: return interpret_float_data(float_data), .None;
+
+                case f16le: return 2;
+                case f32le: return 4;
+                case f64le: return 8;
+
+                case f16be: return 2;
+                case f32be: return 4;
+                case f64be: return 8;
+            }
+
+        case runtime.Type_Info_String:
+            switch string_data in data {
+                case string:  return 4 * (len(string_data) + 1);
+                case cstring: return 4 * (len(string_data) + 1);
+            }
+
+        case runtime.Type_Info_Boolean:
+            return 1;
+
+        case runtime.Type_Info_Pointer:
+            return marshall_serialized_size(data.data);
+
+        case runtime.Type_Info_Array:
+            return iterable_size(data, v.count);
+
+        case runtime.Type_Info_Dynamic_Array:
+            dyn_arr := cast(^runtime.Raw_Dynamic_Array)data.data;
+            return iterable_size(data, dyn_arr.len);
+
+        case runtime.Type_Info_Slice:
+            slice := cast(^runtime.Raw_Slice)data.data;
+            return iterable_size(data, slice.len);
+
+        case runtime.Type_Info_Struct:
+            assert(false, "todo");
+
+        case runtime.Type_Info_Enum:
+            return marshall_serialized_size({ data.data, v.base.id });
+
+    }
+    return -1;
+}
 
 /**
  * @brief helper functions for data serialization
@@ -981,6 +1079,9 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
             return .InvalidType;
 
         case runtime.Type_Info_Soa_Pointer:
+            return .InvalidType;
+
+        case runtime.Type_Info_Bit_Field:
             return .InvalidType;
     }
     return .UnknownError;

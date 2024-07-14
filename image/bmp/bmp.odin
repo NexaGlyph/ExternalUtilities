@@ -465,7 +465,10 @@ bmp_read_bgr8 :: proc(file_path: string) -> (img: image.ImageBGR8, err: BMP_Read
     dib    := _bmp_read_dib(reader, DIB_ExpectedValues { 24 }) or_return;
     data   := _bmp_read_data(reader, auto_cast dib.width, auto_cast dib.height, auto_cast dib.bits_per_pixel/8, Data_ExpectedValues { auto_cast BITMAP_DATA_SIZE(dib.width, dib.height) }) or_return;
     img.data = make([]image.BGR8, dib.width * dib.height);
-    assert(mem.copy(raw_data(img.data), raw_data(data), len(data) * size_of(u8)) != nil, "Failed to copy bitmap data!");
+    for i: i32 = 0; i < dib.width * dib.height; i += 1 {
+        log.infof("%v", data[i * 3 : i * 3 + 3]);
+        mem.copy(&img.data[i], raw_data(data[i * 3 : i * 3 + 3]), 3);
+    }
     img.info = image.BGR_UUID | (image.UINT8_UUID << 4);
     img.size = image.IMAGE_SIZE(dib.width, dib.height);
     return img, .E_NONE;
