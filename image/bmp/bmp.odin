@@ -125,17 +125,36 @@ bmp_write_auto :: proc(using img: ^image.RawImage, file_path: string) -> BMP_Wri
     }
     _bmp_write_dib(writer, init_dib(size, bit_depth));
 
-    bmp_array := make([]u8, size.x * size.y);
-    log.infof("SIZE :: %v", size.x * size.y);
-    assert(mem.copy(raw_data(bmp_array), data, auto_cast (size.x * size.y)) != nil, "Failed to copy raw buffer into temp memory!");
-    // log.infof("%v", bmp_array);
+    if info & image.IMAGE_INFO_IMAGE_TYPE_UUID_MASK != image.BGR_UUID {
+        assert(false, "Not yet supported!");
+    }
+    bmp_array := make([]u8, 3 * size.x * size.y);
+    log.infof("AUTO_SIZE :: %v", 3 * size.x * size.y);
+    assert(mem.copy(raw_data(bmp_array), data, int(3 * size.x * size.y)) != nil, "Failed to copy raw buffer into temp memory!");
     defer delete(bmp_array);
-    _bmp_write_data(writer, size.x, size.y, auto_cast bit_depth/8, bmp_array[:]) or_return;
-    
-    return .E_NONE;
+    return _bmp_write_data(writer, size.x, size.y, cast(u32)bit_depth/8, bmp_array[:]);
 }
 
 bmp_write_bgr :: proc(using img: ^image.Image2(image.BGR($PixelDataT)), file_path: string) -> (err: BMP_WriteError) {
+    bit_depth: u16 = 0;
+    switch (info & image.IMAGE_INFO_PIXEL_TYPE_UUID_MASK) >> 4 {
+        case image.UINT8_UUID:
+            bit_depth = 24;
+            break;
+        case image.UINT16_UUID: // these two (16, 32) will have to be ignored and casted to BGR8
+            assert(size_of(PixelDataT) == 2, "invalid pixel type for UINT16_UUID flag!");
+            img_refactored := image.reinterpret_image_bgr(image.ImageBGR8, image.Image2(image.BGR(PixelDataT)), img);
+            defer image.dump_image2(&img_refactored);
+            return bmp_write_bgr(&img_refactored, file_path);
+        case image.UINT32_UUID:
+            assert(size_of(PixelDataT) == 4, "invalid pixel type for UINT32_UUID flag!");
+            img_refactored := image.reinterpret_image_bgr(image.ImageBGR8, image.Image2(image.BGR(PixelDataT)), img);
+            defer image.dump_image2(&img_refactored);
+            return bmp_write_bgr(&img_refactored, file_path);
+        case:
+            assert(false, "Invalid PIXEL_TYPE_UUID!");
+    }
+
     handle := _bmp_write_begin(file_path);
     writer: io.Writer = os.stream_from_handle(handle);
     defer os.close(handle);
@@ -143,17 +162,9 @@ bmp_write_bgr :: proc(using img: ^image.Image2(image.BGR($PixelDataT)), file_pat
    
     _bmp_write_magic(writer);
     _bmp_write_header(writer, init_header(size));
-    _bmp_write_dib(writer, init_dib(size, 8 * size_of(PixelDataT)));
-    // palette
-    if size_of(PixelDataT) == 1 {
-        gradient_palette := transmute([256*4]u8)init_palette_gradient(256).entries;
-        // log.infof("%v", gradient_palette);
-        utils.write_file_safe(writer, gradient_palette[:]);
-    }
-    bmp_array := _bmp_data_convert(data, size);
-    // log.infof("%v", bmp_array);
-    defer delete(bmp_array);
-    return _bmp_write_data(writer, size.x, size.y, size_of(PixelDataT), bmp_array);
+    _bmp_write_dib(writer, init_dib(size, bit_depth));
+    bmp_array := _bmp_data_convert8(data, size);
+    return _bmp_write_data(writer, size.x, size.y, cast(u32)bit_depth / 8, bmp_array);
 }
 
 /*
@@ -171,7 +182,7 @@ bmp_write_bgr_palette :: proc(using img: ^image.ImageBGR8, palette: BMP_Palette(
     // palette
     utils.write_file_safe(writer, palette.entries);
 
-    bmp_array := _bmp_data_convert(data, size);
+    bmp_array := _bmp_data_convert8(data, size);
     defer delete(bmp_array);
     _bmp_write_data(writer, bmp_array);
 }
@@ -276,33 +287,25 @@ _bmp_write_dib :: #force_inline proc(writer: io.Writer, dib: bmpfile_dib_info) {
 }
 
 @(private="file")
-_bmp_data_convert8 :: #force_inline proc(data_before: []image.BGR8, size: image.ImageSize) -> []u8 {
-    #no_bounds_check data_after := make([]u8, len(data_before) * 4);
-
-    bgr: image.BGR8;
-    for y in 0..<size.y {
-        for x in 0..<size.x {
-            bgr = data_before[y * size.x + x];
-            data_after[(y*size.x + x)*4 + 0] = bgr.r.data;
-            data_after[(y*size.x + x)*4 + 1] = bgr.g.data;
-            data_after[(y*size.x + x)*4 + 2] = bgr.b.data;
-            data_after[(y*size.x + x)*4 + 3] = 0;
-        }
+//>>>NOTE: the $PixelDataT is here for convenience since we are working with raw_union(s), type conversions/deductions are not so easily procured
+_bmp_data_convert8 :: #force_inline proc(data_before: []image.BGR($PixelDataT), size: image.ImageSize) -> []u8 {
+    return transmute([]u8)mem.Raw_Slice {
+        data = raw_data(data_before),
+        len = int(size.x * size.y * 3),
     }
-
-    return data_after;
 }
 
 @(private="file")
+@(deprecated="in this package ImageBGR16 are not directly supported, they are reinterpretted to ImageBGR8")
 _bmp_data_convert16 :: #force_inline proc(data_before: []image.BGR16, size: image.ImageSize) -> []u8 {    
-    #no_bounds_check data_after := make([]u8, len(data_before) * 4 * size_of(u16));
+    #no_bounds_check data_after := make([]u8, len(data_before) * 3 * size_of(u16));
 
     pos: u32;
     bgr: image.BGR16;
     _2byte_array: utils._2BYTES; 
     for i in 0..<size.y*size.x {
         bgr = data_before[i];
-        pos = i * 8;
+        pos = i * 6;
         {
             _2byte_array = utils.btranspose_16u(bgr.r.data);
             data_after[pos + 0] = _2byte_array[0];
@@ -318,25 +321,22 @@ _bmp_data_convert16 :: #force_inline proc(data_before: []image.BGR16, size: imag
             data_after[pos + 4] = _2byte_array[0];
             data_after[pos + 5] = _2byte_array[1];
         }
-        {
-            data_after[pos + 6] = 0;
-            data_after[pos + 7] = 0;
-        }
     }
 
     return data_after;
 }
 
 @(private="file")
+@(deprecated="in this package ImageBGR32 are not directly supported, they are reinterpretted to ImageBGR8")
 _bmp_data_convert32 :: #force_inline proc(data_before: []image.BGR32, size: image.ImageSize) -> []u8 {    
-    #no_bounds_check data_after := make([]u8, len(data_before) * 4 * size_of(u32));
+    #no_bounds_check data_after := make([]u8, len(data_before) * 3 * size_of(u32));
 
     pos: u32;
     bgr: image.BGR32;
     _4byte_array: utils._4BYTES;
     for i in 0..<size.y*size.y {
         bgr = data_before[i];
-        pos = 16 * i;
+        pos = 12 * i;
         {
             _4byte_array = utils.btranspose_32u(bgr.r.data);
             data_after[pos + 0] = _4byte_array[0];
@@ -358,27 +358,19 @@ _bmp_data_convert32 :: #force_inline proc(data_before: []image.BGR32, size: imag
             data_after[pos + 10] = _4byte_array[2];
             data_after[pos + 11] = _4byte_array[3];
         }
-        {
-            data_after[pos + 12] = 0;
-            data_after[pos + 13] = 0;
-            data_after[pos + 14] = 0;
-            data_after[pos + 15] = 0;
-        }
     }
 
     return data_after;
 }
 
 @(private="file")
-_bmp_data_convert :: proc { _bmp_data_convert8, _bmp_data_convert16, _bmp_data_convert32 }
-
-@(private="file")
 @(require_results)
 _bmp_write_data :: #force_inline proc(writer: io.Writer, width: u32, height: u32, bytes_per_pixel: u32, data: []u8) -> BMP_WriteError {
-    row_size_with_padding := int((width + 3) / 4) * 4;
-    row_size_without_padding := width;
+    row_size_with_padding := int((width * bytes_per_pixel + 3) / 4) * 4;
+    row_size_without_padding := width * bytes_per_pixel;
 
     row_buffer := make([]u8, row_size_with_padding);
+    defer delete(row_buffer);
 
     for i in 0..<height {
         assert(copy_slice(row_buffer, data[i * row_size_without_padding : (i + 1) * row_size_without_padding]) == row_size_with_padding);
@@ -456,7 +448,6 @@ bmp_read_bgr_auto :: proc(file_path: string) -> (img: image.RawImage, err: BMP_R
         auto_cast BITMAP_DATA_SIZE(dib.width, dib.height),
      }) or_return;
     img.data = raw_data(data);
-    log.infof("SIZE_WRITE :: %v", size_of(img.data));
     return img, .E_NONE;
 }
 
@@ -601,17 +592,17 @@ _bmp_read_data :: proc(reader: io.Reader, width: u32, height: u32, bytes_per_pix
 
     row_buffer := make([]u8, row_size_with_padding);
     final_data := make([]u8, row_size_without_padding * height);
+    defer {
+        delete(row_buffer);
+        delete(final_data);
+    }
 
     for i in 0..<height {
         len, err := io.read(reader, row_buffer);
         if len != row_size_with_padding {
-            delete(row_buffer);
-            delete(final_data);
             return {}, .E_READ_UNEXPECTED_END_OF_FILE;
         } 
         if err != .None {
-            delete(row_buffer);
-            delete(final_data);
             log.errorf("%v", err);
             return {}, .E_READ_CORRUPTED_DATA;
         }

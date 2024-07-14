@@ -1,7 +1,8 @@
 package performance_profiler
 
+import "base:runtime"
+
 import "core:time"
-import "core:runtime"
 
 CPUTimeStampDescription :: struct {
     function: runtime.Source_Code_Location,
