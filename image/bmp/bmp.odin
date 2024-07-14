@@ -289,10 +289,18 @@ _bmp_write_dib :: #force_inline proc(writer: io.Writer, dib: bmpfile_dib_info) {
 @(private="file")
 //>>>NOTE: the $PixelDataT is here for convenience since we are working with raw_union(s), type conversions/deductions are not so easily procured
 _bmp_data_convert8 :: #force_inline proc(data_before: []image.BGR($PixelDataT), size: image.ImageSize) -> []u8 {
-    return transmute([]u8)mem.Raw_Slice {
-        data = raw_data(data_before),
-        len = int(size.x * size.y * 3),
+    // this cannot work because the BGR has to be padded by extra byte (this transmute then fails...)
+    // return transmute([]u8)mem.Raw_Slice {
+    //     data = raw_data(data_before),
+    //     len = int(size.x * size.y * 3),
+    // }
+    byte_array := make([]u8, size.x * size.y * 3);
+    for bgr, index in data_before {
+        byte_array[3 * index + 0] = bgr.r.data;
+        byte_array[3 * index + 1] = bgr.g.data;
+        byte_array[3 * index + 2] = bgr.b.data;
     }
+    return byte_array;
 }
 
 @(private="file")
@@ -464,13 +472,19 @@ bmp_read_bgr8 :: proc(file_path: string) -> (img: image.ImageBGR8, err: BMP_Read
     header := _bmp_read_header(reader, Header_ExpectedValues { BMP_OFFSET }) or_return;
     dib    := _bmp_read_dib(reader, DIB_ExpectedValues { 24 }) or_return;
     data   := _bmp_read_data(reader, auto_cast dib.width, auto_cast dib.height, auto_cast dib.bits_per_pixel/8, Data_ExpectedValues { auto_cast BITMAP_DATA_SIZE(dib.width, dib.height) }) or_return;
+
     img.data = make([]image.BGR8, dib.width * dib.height);
-    for i: i32 = 0; i < dib.width * dib.height; i += 1 {
-        log.infof("%v", data[i * 3 : i * 3 + 3]);
-        mem.copy(&img.data[i], raw_data(data[i * 3 : i * 3 + 3]), 3);
-    }
     img.info = image.BGR_UUID | (image.UINT8_UUID << 4);
     img.size = image.IMAGE_SIZE(dib.width, dib.height);
+    copy_data_into_img :: proc(data: []u8, img: []image.BGR8) {
+        for i := 0; i < len(img); i += 1 {
+            img[i].r.data = data[i * 3 + 0];
+            img[i].g.data = data[i * 3 + 1];
+            img[i].b.data = data[i * 3 + 2];
+        }
+    }
+    copy_data_into_img(data[:], img.data[:]);
+
     return img, .E_NONE;
 }
 
@@ -595,18 +609,17 @@ _bmp_read_data :: proc(reader: io.Reader, width: u32, height: u32, bytes_per_pix
 
     row_buffer := make([]u8, row_size_with_padding);
     final_data := make([]u8, row_size_without_padding * height);
-    defer {
-        delete(row_buffer);
-        delete(final_data);
-    }
+    defer delete(row_buffer);
 
     for i in 0..<height {
         len, err := io.read(reader, row_buffer);
         if len != row_size_with_padding {
+            delete(final_data);
             return {}, .E_READ_UNEXPECTED_END_OF_FILE;
         } 
         if err != .None {
             log.errorf("%v", err);
+            delete(final_data);
             return {}, .E_READ_CORRUPTED_DATA;
         }
         copy_slice(final_data[i * row_size_without_padding:(i+1)*row_size_without_padding], row_buffer[:row_size_without_padding]);
