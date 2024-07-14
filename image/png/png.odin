@@ -1,5 +1,6 @@
 package png
 
+import "core:fmt"
 import "core:mem"
 import "core:strings"
 import "core:os"
@@ -104,6 +105,13 @@ CRC_TABLE := [256]u32 {
     0x24b4a3a6, 0xbad03605, 0xcdd70693, 0x54de5729, 0x23d967bf, 0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94,
     0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d,
 };
+
+// import "core:hash"
+
+// crc32 :: proc "contextless" (type: [4]u8, data: []byte) -> u32 {
+//     type := type;
+//     return hash.crc32(data, hash.crc32(type[:]));
+// }
 
 crc32 :: proc(type: [4]u8, data: []byte) -> u32 {
     crc := u32(0xffffffff);
@@ -250,7 +258,7 @@ MFilterType :: enum u8 {
 PLTE :: Chunk(PLTE_Data);
 PLTE_NUM_VALID_OCCURRENCES :: 1;
 
-PNG_PaletteEntry :: [4]u8;
+PNG_PaletteEntry :: [3]u8; // alpha channel has to be modified by tRNS chunk!
 PNG_Palette :: struct($N: int) {
     entries: [N]PNG_PaletteEntry,
 }
@@ -267,22 +275,21 @@ PLTE_DataLength :: -1; /* >>>NOTE: TO DO */
 
 palette_gradient :: #force_inline proc "fastcall" ($N: int) -> [N]PNG_PaletteEntry {
     entries := [N]PNG_PaletteEntry{};
-    for i in 0..=u8(N - 1) do entries[i] = { i, i, i, 255, };
+    for i in 0..=u8(N - 1) do entries[i] = { i, i, i };
     return entries;
 }
 
 init_PLTE :: #force_inline proc($palette_size: int) -> optional.Optional(PLTE) {
     if palette_size > 0 {
         palette := make([]PNG_PaletteEntry, palette_size);
-        defer delete(palette);
         crc := u32(0);
         {
             temp_palette := palette_gradient(palette_size);
-            byte_entries := transmute([palette_size * 4]u8)(temp_palette);
+            byte_entries := transmute([palette_size * 3]u8)(temp_palette);
             crc = crc32(PLTE_TYPE, byte_entries[:]);
             copy(palette[:], temp_palette[:]);
         }
-        return optional.init(init_chunk(u32be(4 * palette_size), PLTE_TYPE, PLTE_Data{palette[:]}, crc));
+        return optional.init(init_chunk(u32be(3 * palette_size), PLTE_TYPE, PLTE_Data{palette[:]}, crc));
     }
     return init_chunk(0, PLTE_TYPE, optional.init(PLTE), 0);
 }
@@ -353,7 +360,6 @@ compress :: proc { compress8, compress16, compress32 }
 init_IDAT :: proc(data: ^IDAT, data_to_compress: []image.BGR($PixelDataT)) {
     // IDAT_Data
     compressed_data: []u8 = compress(data_to_compress);
-    defer delete(compressed_data);
     if len(compressed_data) > IDAT_DATA_BLOCK_COMPRESSED_DATA_MAX_SIZE {
         assert(false, "this still does not work!");
         num_blocks := (len(compressed_data) + IDAT_DATA_BLOCK_COMPRESSED_DATA_MAX_SIZE - 1) / IDAT_DATA_BLOCK_COMPRESSED_DATA_MAX_SIZE;
@@ -370,11 +376,10 @@ init_IDAT :: proc(data: ^IDAT, data_to_compress: []image.BGR($PixelDataT)) {
         }
     }
     else {
-        data.compressed_blocks = make([]IDAT_DataBlock, 1); 
+        data.compressed_blocks = make([]IDAT_DataBlock, 1);
         data.compressed_blocks[0].length = u16(len(compressed_data));
-        data.compressed_blocks[0].compressed_data = make([]u8, len(compressed_data));
-        mem.copy(raw_data(data.compressed_blocks[0].compressed_data), raw_data(compressed_data), len(compressed_data));
-        log.errorf("%v", data.compressed_blocks[0].compressed_data);
+        data.compressed_blocks[0].compressed_data = compressed_data;
+        fmt.printf("\x1b[37m%v\x1b[36m\n%v\x1b[0m\n", data.compressed_blocks[0].compressed_data, compressed_data);
         data.compressed_blocks[0].zlib_header = ZLIBHDR_DEFAULT;
         data.compressed_blocks[0].adler = 0;
     }
@@ -382,8 +387,6 @@ init_IDAT :: proc(data: ^IDAT, data_to_compress: []image.BGR($PixelDataT)) {
     // Chunk data
     data.length = u32be(len(compressed_data));
     data.type = IDAT_TYPE;
-    // crc_array := get_crc_idat_data_array(data.compressed_blocks, len(compressed_data))
-    // defer delete(crc_array);
     data.crc = crc32(IDAT_TYPE, compressed_data);
 }
 
@@ -461,8 +464,9 @@ png_write :: proc { png_write_bgr8, png_write_bgr16, png_write_bgr32 }
 png_write_bgr8  :: proc(using img: ^image.ImageBGR8, file_path: string) {
     png := PNG_Schema{};
     defer {
-        for block in &png.data.compressed_blocks do dump_data_block(&block);
+        for &block in png.data.compressed_blocks do dump_data_block(&block);
         delete(png.data.compressed_blocks);
+        delete(optional.get(&png.palette).entries);
     }
    
     log.infof("[PNG-WRITE-BEGIN]");
@@ -507,18 +511,29 @@ _png_write :: #force_inline proc(using schema: ^PNG_Schema, $palette_size: int, 
     log.info("HEADER");
     png_write_chunk(&header, writer);
     log.info("HEADER CHUNK");
-    // png_write_chunk(optional.get(&palette), writer);
     {
         _palette := optional.get(&palette);
-        data := [4 * palette_size]u8{};
-        mem.copy(raw_data(data[:]), raw_data(_palette.data.entries), 4 * palette_size);
-        log.infof("%v", data);
-        utils.write_file_safe(writer, data[:]);
+        fmt.printf("\x1b[33mChunk length: %v; of chunk: %v\n\x1b[0m", _palette.length, string(_palette.type[:]));
+        _4byte_array: [4]u8 = _transpose_chunk_length(_palette.length);
+        utils.write_file_safe(writer, _4byte_array[:]);
+        utils.write_file_safe(writer, _palette.type[:]);
+        png_write_palette_chunk_data(writer, &_palette.data, palette_size);
+        fmt.printf("\x1b[33mCrc check [Palette]: %v\n\x1b[0m", _palette.crc);
+        _4byte_array = utils.btranspose_32u(_palette.crc);
+        utils.write_file_safe(writer, _4byte_array[:]); 
     }
     log.info("PLTE CHUNK");
     png_write_chunk(&data, writer);
     log.info("DATA CHUNK");
-    png_write_chunk(&end, writer);
+    {
+        fmt.printf("\x1b[33mChunk length: %v; of chunk: %v\n\x1b[0m", end.length, string(end.type[:]));
+        _4byte_array: [4]u8 = _transpose_chunk_length(end.length);
+        utils.write_file_safe(writer, _4byte_array[:]);
+        utils.write_file_safe(writer, end.type[:]);
+        png_write_end_chunk_data(writer, &end.data);
+        _4byte_array = utils.btranspose_32u(end.crc);
+        utils.write_file_safe(writer, _4byte_array[:]); 
+    }
     log.info("END CHUNK");
     io.close(writer);
 }
@@ -532,17 +547,16 @@ png_write_header :: #force_inline proc(writer: io.Writer) {
 }
 
 png_write_chunk :: proc(using chunk: ^Chunk($T), writer: io.Writer) {
+    fmt.printf("\x1b[33mChunk length: %v; of chunk: %v\n\x1b[0m", length, string(type[:]));
     _4byte_array: [4]u8 = _transpose_chunk_length(length);
     utils.write_file_safe(writer, _4byte_array[:]);
     utils.write_file_safe(writer, type[:]);
     png_write_chunk_data(writer, &data);
-    // log.errorf("%v", crc);
-    // log.infof("%v", utils.btranspose_32u(crc));
     _4byte_array = utils.btranspose_32u(crc);
     utils.write_file_safe(writer, _4byte_array[:]); 
 }
 
-png_write_chunk_data :: proc { png_write_header_chunk_data, png_write_palette_chunk_data, png_write_data_chunk_data, png_write_end_chunk_data }
+png_write_chunk_data :: proc { png_write_header_chunk_data, png_write_data_chunk_data, png_write_end_chunk_data }
 
 png_write_header_chunk_data  :: #force_inline proc(writer: io.Writer, header: ^IHDR_Data) {
     _4byte_array: utils._4BYTES = utils.btranspose_32u(header^.width);
@@ -552,18 +566,11 @@ png_write_header_chunk_data  :: #force_inline proc(writer: io.Writer, header: ^I
     utils.write_file_safe(writer, { header^.bit_depth, header^.color_type, header^.m_compression, header^.m_filter, header^.m_interlace });
 }
 
-@(disabled=true)
-png_write_palette_chunk_data :: proc(writer: io.Writer, palette: ^PLTE_Data) {
-    data: []u8 = make([]u8, 4 * len(palette^.entries));
-    defer delete(data);
-    // mem.copy(raw_data(data), raw_data(palette^.entries), 4 * len(palette^.entries));
-    for i in 0..<len(palette.entries) {
-        data[i * 4 + 0] = palette.entries[i][0];
-        data[i * 4 + 1] = palette.entries[i][1];
-        data[i * 4 + 2] = palette.entries[i][2];
-        data[i * 4 + 3] = palette.entries[i][3];
-    }
-    log.infof("%v", data);
+png_write_palette_chunk_data :: proc(writer: io.Writer, palette: ^PLTE_Data, $palette_size: int) {
+    fmt.printf("\x1b[32m%v\n\x1b[0m", palette.entries);
+    data := [3 * palette_size]u8{};
+    mem.copy(raw_data(data[:]), raw_data(palette.entries), 3 * palette_size);
+    fmt.printf("\x1b[31m%v\n\x1b[0m", data);
     utils.write_file_safe(writer, data[:]);
 }
 
@@ -574,15 +581,10 @@ png_write_data_chunk_data    :: proc(writer: io.Writer, data: ^IDAT_Data) {
     for block in data^.compressed_blocks {
         _2byte_array = utils.btranspose_16u(block.length);
         utils.write_file_safe(writer, _2byte_array[:]);
-        // log.infof("%v", utils.btranspose_16u(block.length));
         utils.write_file_safe(writer, { block.zlib_header.CMF, block.zlib_header.FLG });
-        // log.infof("%v .... %v", block.zlib_header.CMF, block.zlib_header.FLG);
         utils.write_file_safe(writer, block.compressed_data);
-        // log.infof("%v", block.compressed_data);
-        // log.infof("%v", len(block.compressed_data));
         _4byte_array = utils.btranspose_32u(block.adler);
         utils.write_file_safe(writer, _4byte_array[:]);
-        // log.infof("%v", utils.btranspose_32u(block.adler));
     }
 }
 

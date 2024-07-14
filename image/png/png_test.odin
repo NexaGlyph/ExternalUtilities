@@ -15,7 +15,7 @@ main :: proc() {
     performance.begin(&profiler);
     {
         generated_image := image.ImageBGR8{
-            size = image.IMAGE_SIZE(5, 5),
+            size = image.IMAGE_SIZE(100, 100),
         };
         image.generate_random_image_ubgr(&generated_image);
         defer image.dump_image2(&generated_image);
