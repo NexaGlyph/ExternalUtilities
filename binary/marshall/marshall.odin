@@ -840,7 +840,7 @@ interpret_bytes_to_array :: proc(val: any, info: runtime.Type_Info_Array, data: 
                 for i in 0..<info.count {
                     deserialize(
                         any { rawptr(uintptr(val.data) + uintptr(i * info.elem_size)), info.elem.id },
-                        data[i * info.elem_size : (i + 1) * info.elem_size],
+                        data[8 + i * info.elem_size : 8 + (i + 1) * info.elem_size],
                     ) or_return;
                 }
                 return .None;
