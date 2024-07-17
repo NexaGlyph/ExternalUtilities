@@ -192,26 +192,25 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct) -> (byte_d
 
     StructTempData :: struct {
         offset: int,
-        data: [^]byte,
+        data: []byte,
     }
 
+    //todo: optimize with using "marshall_serialize_size" instead of this dynamic allocation
+    //todo: not every offset for every type is accurate! (indexable types)
     byte_data_temp := make_dynamic_array_len([dynamic]StructTempData, len(v.offsets));
+    defer delete(byte_data_temp);
     byte_data_size_final := u32(0);
     for offset, index in v.offsets {
         // note: leave this "NexaTag_Marshallable" later, when "meta" package will be supported...
         // if v.tags[index] == "NexaTag_Marshallable" {
-            // note: these "offsets" are not quite good because of "indexable" types and pointers!!!
             fmt.println("Before serialize");
-            // byte_array := serialize(uintptr(base_data.data) + offset) or_return;
-            byte_array, s_err := serialize(uintptr(base_data.data) + offset);
+            byte_array, s_err := serialize(any {
+                data = cast(rawptr)(uintptr(base_data.data) + offset),
+                id = v.types[index].id,
+            });
             fmt.printf("%v; %v\n", s_err, v.types[index]);
             fmt.println("After serialize");
-            defer delete(byte_array);
-            append(&byte_data_temp, StructTempData{ 
-                data = intrinsics.alloca(len(byte_array), align_of(byte)),
-                offset = int(offset),
-            });
-            mem.copy(byte_data_temp[index].data, raw_data(byte_array), len(byte_array));
+            append(&byte_data_temp, StructTempData { offset = int(offset), data = byte_array });
             fmt.printf("\t%v :: %v\n", byte_data_temp[index].data, byte_array);
             byte_data_size_final += u32(len(byte_array));
         // }
@@ -219,9 +218,11 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct) -> (byte_d
     byte_data = make([]byte, byte_data_size_final);
     prev_pos := 0;
     for struct_data in byte_data_temp {
-        mem.copy(raw_data(byte_data[prev_pos:prev_pos + struct_data.offset]), struct_data.data, struct_data.offset);
-        prev_pos += struct_data.offset;
+        copy_slice(byte_data[prev_pos : prev_pos + len(struct_data.data)], struct_data.data);
+        prev_pos += len(struct_data.data);
+        delete(struct_data.data);
     }
+
     return;
 }
 /*! STRUCT */
@@ -380,8 +381,8 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
         case runtime.Type_Info_Soa_Pointer:
             return nil, .InvalidType;
 
-        case runtime.Type_Info_Bit_Field:
-            return nil, .InvalidType;
+        // case runtime.Type_Info_Bit_Field:
+        //     return nil, .InvalidType;
     }
     return nil, .UnknownError;
 }
@@ -1081,8 +1082,8 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
         case runtime.Type_Info_Soa_Pointer:
             return .InvalidType;
 
-        case runtime.Type_Info_Bit_Field:
-            return .InvalidType;
+        // case runtime.Type_Info_Bit_Field:
+        //     return .InvalidType;
     }
     return .UnknownError;
 }
