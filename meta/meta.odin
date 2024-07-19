@@ -94,6 +94,11 @@ check_file_contents :: proc(file_name: string) {
                                     index := proc_inline(decl);
                                     assert(index != 0);
                                     append(&proc_inline_indices, index);
+                                /**
+                                 * @brief function that has prohibited access (this can be only done on "NexaAttr_APICall" procs) to NexaContext since this proc is/could be called BEFORE context init
+                                 */
+                                case "NexaAttr_CoreInit":
+                                    assert(false, "TODO");
                                 // ignore all others
                             }
                             break expr_loop;
