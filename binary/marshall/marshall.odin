@@ -145,45 +145,66 @@ interpret_array :: proc(arr: any, v: runtime.Type_Info_Array) -> (byte_data: []b
     if v.count > 1 << (size_of(u32) * 8) do return nil, .ArrayTooLong;
 
     ByteData :: struct {
-        data: [^]byte,
-        size: int,
+        data: []byte,
     }
 
-    byte_data_temp := make([dynamic]ByteData);
-    byte_data_len: int = 0;
+    total_size := 0;
     for it := 0; it < v.count; {
         val, idx, fine := reflect.iterate_array(arr, &it);
         if !fine do break;
 
-        serialized := serialize(val) or_return;
-        defer delete(serialized);
-
-        append(
-            &byte_data_temp, 
-            ByteData {
-                data = intrinsics.alloca(len(serialized), align_of(byte)),
-                size = len(serialized),
-            },
-        );
-        byte_data := &byte_data_temp[it - 1];
-        mem.copy(byte_data^.data, raw_data(serialized), byte_data^.size);
-
-        byte_data_len += byte_data^.size;
-
+        total_size += marshall_serialized_size(val);
     }
 
-    // first 8 bytes: [(4 bytes)=(num of elements); (4 bytes)=(num of bytes)]
-    byte_data = make([]byte, 8 + byte_data_len);
-    length_byte_data := interpret_int_data((u64(v.count) << 32) | u64(byte_data_len + 8));
-    // fmt.printf("Special size: %v\n", (u64(v.count) << 32) | u64(byte_data_len + 8));
-    // fmt.printf("Special size buffer: %v\n", length_byte_data);
+    byte_data = make([]byte, 8 + total_size);
+    length_byte_data := interpret_int_data((u64(v.count) << 32) | u64(total_size + 8));
     copy_slice(byte_data[:8], length_byte_data);
     delete(length_byte_data);
-    prev_pos := 8;
-    for data in byte_data_temp {
-        mem.copy(raw_data(byte_data[prev_pos:prev_pos + data.size]), data.data, int(data.size));
-        prev_pos += data.size;
+    prev_pos, data_len := 8, 0;
+    for it := 0; it < v.count; {
+        val, idx, fine := reflect.iterate_array(arr, &it);
+        if !fine do break;
+        
+        serialized := serialize(val) or_return;
+        data_len = len(serialized);
+        copy_slice(byte_data[prev_pos:prev_pos + data_len], serialized);
+        delete(serialized);
+
+        prev_pos += data_len;
     }
+
+    // byte_data_temp := make([dynamic]ByteData);
+    // defer delete(byte_data_temp);
+    // byte_data_len: int = 0;
+    // for it := 0; it < v.count; {
+    //     val, idx, fine := reflect.iterate_array(arr, &it);
+    //     if !fine do break;
+
+    //     serialized := serialize(val) or_return;
+
+    //     append(
+    //         &byte_data_temp, 
+    //         ByteData {
+    //             data = serialized,
+    //         },
+    //     );
+    //     byte_data_len += len(serialized);
+    // }
+
+    // // first 8 bytes: [(4 bytes)=(num of elements); (4 bytes)=(num of bytes)]
+    // byte_data = make([]byte, 8 + byte_data_len);
+    // length_byte_data := interpret_int_data((u64(v.count) << 32) | u64(byte_data_len + 8));
+    // fmt.printf("Special size: %v\n", (u64(v.count) << 32) | u64(byte_data_len + 8));
+    // fmt.printf("Special size buffer: %v\n", length_byte_data);
+    // copy_slice(byte_data[:8], length_byte_data);
+    // delete(length_byte_data);
+    // prev_pos, data_len := 8, 0;
+    // for data in byte_data_temp {
+    //     data_len = len(data.data);
+    //     copy_slice(byte_data[prev_pos:prev_pos + data_len], data.data);
+    //     delete(data.data);
+    //     prev_pos += data_len;
+    // }
     return;
 }
 /*! ARRAY */
