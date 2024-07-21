@@ -82,7 +82,7 @@ init_dib :: proc(size: image.ImageSize, bit_depth: u16) -> bmpfile_dib_info {
     return {
         header_size = size_of(bmpfile_dib_info),
         width = i32(size.x),
-        height = i32(size.y),
+        height = i32(size.y) * -1,
         num_planes = 1,
         bits_per_pixel = bit_depth,
         compression = 0,
@@ -128,9 +128,12 @@ bmp_write_auto :: proc(using img: ^image.RawImage, file_path: string) -> BMP_Wri
     if info & image.IMAGE_INFO_IMAGE_TYPE_UUID_MASK != image.BGR_UUID {
         assert(false, "Not yet supported!");
     }
-    bmp_array := make([]u8, 3 * size.x * size.y);
-    log.infof("AUTO_SIZE :: %v", 3 * size.x * size.y);
-    assert(mem.copy(raw_data(bmp_array), data, int(3 * size.x * size.y)) != nil, "Failed to copy raw buffer into temp memory!");
+    bmp_array := _bmp_data_convert8(
+        transmute([]image.BGR8)mem.Raw_Slice {
+            data = data,
+            len = int(size.x * size.y),
+        }, size
+    );
     defer delete(bmp_array);
     return _bmp_write_data(writer, size.x, size.y, cast(u32)bit_depth/8, bmp_array[:]);
 }
@@ -164,6 +167,8 @@ bmp_write_bgr :: proc(using img: ^image.Image2(image.BGR($PixelDataT)), file_pat
     _bmp_write_header(writer, init_header(size));
     _bmp_write_dib(writer, init_dib(size, bit_depth));
     bmp_array := _bmp_data_convert8(data, size);
+    defer delete(bmp_array);
+    // log.infof("\x1b[31m%v\x1b[0m", bmp_array);
     return _bmp_write_data(writer, size.x, size.y, cast(u32)bit_depth / 8, bmp_array);
 }
 
@@ -268,7 +273,7 @@ write_transformed_field :: proc {
 
 @(private="file")
 _bmp_write_dib :: #force_inline proc(writer: io.Writer, dib: bmpfile_dib_info) {
-    dib_array: [44]u8 = {};    
+    dib_array: [size_of(bmpfile_dib_info)]u8 = {};
     write_transformed_field(dib_array[:], 0, 4,   dib.header_size, utils.btranspose_32u_le);
     write_transformed_field(dib_array[:], 4, 8,   dib.width, utils.btranspose_32i_le);
     write_transformed_field(dib_array[:], 8, 12,  dib.height, utils.btranspose_32i_le);
@@ -281,24 +286,17 @@ _bmp_write_dib :: #force_inline proc(writer: io.Writer, dib: bmpfile_dib_info) {
     write_transformed_field(dib_array[:], 32, 36, dib.num_colors, utils.btranspose_32u_le);
     write_transformed_field(dib_array[:], 36, 40, dib.num_important_colors, utils.btranspose_32u_le);
 
-    // log.infof("%v", dib_array);
-
     utils.write_file_safe(writer, dib_array[:]);
 }
 
-@(private="file")
+// @(private="file")
 //>>>NOTE: the $PixelDataT is here for convenience since we are working with raw_union(s), type conversions/deductions are not so easily procured
 _bmp_data_convert8 :: #force_inline proc(data_before: []image.BGR($PixelDataT), size: image.ImageSize) -> []u8 {
-    // this cannot work because the BGR has to be padded by extra byte (this transmute then fails...)
-    // return transmute([]u8)mem.Raw_Slice {
-    //     data = raw_data(data_before),
-    //     len = int(size.x * size.y * 3),
-    // }
     byte_array := make([]u8, size.x * size.y * 3);
     for bgr, index in data_before {
-        byte_array[3 * index + 0] = bgr.r.data;
-        byte_array[3 * index + 1] = bgr.g.data;
-        byte_array[3 * index + 2] = bgr.b.data;
+        byte_array[3 * index + 0] = cast(u8)bgr.r.data;
+        byte_array[3 * index + 1] = cast(u8)bgr.g.data;
+        byte_array[3 * index + 2] = cast(u8)bgr.b.data;
     }
     return byte_array;
 }
@@ -455,6 +453,7 @@ bmp_read_bgr_auto :: proc(file_path: string) -> (img: image.RawImage, err: BMP_R
     data    := _bmp_read_data(reader, auto_cast dib.width, auto_cast dib.height, auto_cast dib.bits_per_pixel / 8, Data_ExpectedValues { 
         auto_cast BITMAP_DATA_SIZE(dib.width, dib.height),
      }) or_return;
+    // log.infof("\x1b[33m%v\x1b[0m", data);
     img.data = raw_data(data);
     return img, .E_NONE;
 }
@@ -472,6 +471,7 @@ bmp_read_bgr8 :: proc(file_path: string) -> (img: image.ImageBGR8, err: BMP_Read
     header := _bmp_read_header(reader, Header_ExpectedValues { BMP_OFFSET }) or_return;
     dib    := _bmp_read_dib(reader, DIB_ExpectedValues { 24 }) or_return;
     data   := _bmp_read_data(reader, auto_cast dib.width, auto_cast dib.height, auto_cast dib.bits_per_pixel/8, Data_ExpectedValues { auto_cast BITMAP_DATA_SIZE(dib.width, dib.height) }) or_return;
+    defer delete(data);
 
     img.data = make([]image.BGR8, dib.width * dib.height);
     img.info = image.BGR_UUID | (image.UINT8_UUID << 4);
@@ -484,6 +484,7 @@ bmp_read_bgr8 :: proc(file_path: string) -> (img: image.ImageBGR8, err: BMP_Read
         }
     }
     copy_data_into_img(data[:], img.data[:]);
+    // log.infof("\x1b[33m%v\x1b[0m", data);
 
     return img, .E_NONE;
 }
@@ -556,6 +557,7 @@ _bmp_read_dib :: proc(reader: io.Reader, expected: DIB_ExpectedValues) -> (bmpfi
         next += size_of(i32);
         // height
         dib.height = utils.i32_le_transpose(dib_binary[next:next + size_of(i32)]);
+        if dib.height < 0 do dib.height *= -1;
         next += size_of(i32);
         // number of planes
         dib.num_planes = utils.u16_le_transpose(dib_binary[next:next + size_of(u16)]);
@@ -580,6 +582,7 @@ _bmp_read_dib :: proc(reader: io.Reader, expected: DIB_ExpectedValues) -> (bmpfi
         next += size_of(u32);
         // important colors
         dib.num_important_colors = utils.u32_le_transpose(dib_binary[next:next + size_of(u32)]);
+        next += size_of(u32);
     }
 
     return dib, .E_NONE;
@@ -624,5 +627,6 @@ _bmp_read_data :: proc(reader: io.Reader, width: u32, height: u32, bytes_per_pix
         }
         copy_slice(final_data[i * row_size_without_padding:(i+1)*row_size_without_padding], row_buffer[:row_size_without_padding]);
     }
+    // log.errorf("Final slice: %v", row_buffer);
     return final_data, .E_NONE;
 }
