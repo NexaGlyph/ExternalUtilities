@@ -37,11 +37,12 @@ Marshall_Error :: enum u8 {
  */
 
 /* INTEGER */
-interpret_int_be_data :: proc(integer_data: $INT_T) -> []byte 
+interpret_int_be_data :: proc(integer_data: $INT_T, byte_data: []byte = nil) -> []byte 
     where intrinsics.type_is_integer(INT_T) 
 {
     // fmt.printf("Size: %v\nType: %v\n", size_of(INT_T), type_info_of(INT_T));
-    byte_data := make([]byte, size_of(INT_T));
+    byte_data := byte_data;
+    if byte_data == nil do byte_data = make([]byte, size_of(INT_T));
     byte_index: u8 = (size_of(INT_T) - 1) * 8;
     for i in 0..<size_of(INT_T) {
         byte_data[i] = byte(integer_data >> byte_index);
@@ -49,11 +50,12 @@ interpret_int_be_data :: proc(integer_data: $INT_T) -> []byte
     }
     return byte_data;
 }
-interpret_int_le_data :: proc(integer_data: $INT_T) -> []byte 
-    where intrinsics.type_is_integer(INT_T) 
+interpret_int_le_data :: proc(integer_data: $INT_T, byte_data: []byte = nil) -> []byte 
+    where intrinsics.type_is_integer(INT_T) && intrinsics.type_is_endian_little(INT_T)
 {
     // fmt.printf("Size: %v\nType: %v\n", size_of(INT_T), type_info_of(INT_T));
-    byte_data := make([]byte, size_of(INT_T));
+    byte_data := byte_data;
+    if byte_data == nil do byte_data = make([]byte, size_of(INT_T));
     byte_index: u8 = 0;
     for i in 0..<size_of(INT_T) {
         byte_data[i] = byte(integer_data >> byte_index);
@@ -68,51 +70,105 @@ when ODIN_ENDIAN == .Big {
 }
 /*! INTEGER */
 /* FLOAT */
-FLOAT_PRECISION :: 5; // signifies how many digits after 0 are going to be written
-interpret_float_le_data   :: proc { interpret_float16_le_data, interpret_float32_le_data, interpret_float64_le_data }
-interpret_float16_le_data :: proc(float_data: f16le) -> []byte {
-    byte_data := make([]byte, size_of(f16le));
-    float_bits := transmute(u16le)(float_data * math.pow(f16le(10), FLOAT_PRECISION));
-    for i: u8 = 0; i < size_of(f16le); i += 1 do byte_data[i] = byte(float_bits >> (8 * i));
-    return byte_data;
+
+FLOAT_PRECISION :: 5;
+
+FloatOffsetsTable :: struct($EXP, $MANTISSA: typeid) {
+    exponent_shift: EXP,
+    exponent_mask: MANTISSA,
+    mantissa_mask: MANTISSA,
 }
-interpret_float32_le_data :: proc(float_data: f32le) -> []byte {
-    byte_data := make([]byte, size_of(f32le));
-    float_bits := transmute(u32le)(float_data * math.pow(f32le(10), FLOAT_PRECISION));
-    for i: u8 = 0; i < size_of(f32le); i += 1 do byte_data[i] = byte(float_bits >> (8 * i));
-    return byte_data;
+
+F16le_OFFSETS_TABLE :: FloatOffsetsTable(i8,    u16le) { 10, 0x7C00,             0x3FF};
+F32le_OFFSETS_TABLE :: FloatOffsetsTable(i16le, u32le) { 23, 0x7F800000,         0x007FFFFF};
+F64le_OFFSETS_TABLE :: FloatOffsetsTable(i32le, u64le) { 52, 0x7FF0000000000000, 0x000FFFFFFFFFFFFF};
+
+F16be_OFFSETS_TABLE :: FloatOffsetsTable(i8,    u16be) { 10, 0x7C00,             0x3FF};
+F32be_OFFSETS_TABLE :: FloatOffsetsTable(i16be, u32be) { 23, 0x7F800000,         0x007FFFFF};
+F64be_OFFSETS_TABLE :: FloatOffsetsTable(i32be, u64be) { 52, 0x7FF0000000000000, 0x000FFFFFFFFFFFFF};
+
+// LITTLE ENDIAN
+interpret_float_data :: proc(float: any) -> ([]byte, Marshall_Error) {
+    switch &float_data in float {
+        case f16:   return interpret_float_le_data(cast(f16le)float_data, F16le_OFFSETS_TABLE), .None;
+        case f32:   return interpret_float_le_data(cast(f32le)float_data, F32le_OFFSETS_TABLE), .None;
+        case f64:   return interpret_float_le_data(cast(f64le)float_data, F64le_OFFSETS_TABLE), .None;
+
+        case f16le: return interpret_float_le_data(float_data, F16le_OFFSETS_TABLE), .None;
+        case f32le: return interpret_float_le_data(float_data, F32le_OFFSETS_TABLE), .None;
+        case f64le: return interpret_float_le_data(float_data, F64le_OFFSETS_TABLE), .None;
+
+        case f16be: return interpret_float_be_data(float_data, u16le, F16be_OFFSETS_TABLE), .None;
+        case f32be: return interpret_float_be_data(float_data, u32le, F32be_OFFSETS_TABLE), .None;
+        case f64be: return interpret_float_be_data(float_data, u64le, F64be_OFFSETS_TABLE), .None;
+    }
+    return {}, .UnknownError;
 }
-interpret_float64_le_data :: proc(float_data: f64le) -> []byte {
-    byte_data := make([]byte, size_of(f64le));
-    float_bits := transmute(u64le)(float_data * math.pow(f64le(10), FLOAT_PRECISION));
-    for i: u8 = 0; i < size_of(f64le); i += 1 do byte_data[i] = byte(float_bits >> (8 * i));
+
+interpret_float_le_data :: proc(float_data: $FLOAT_T, offsets: FloatOffsetsTable($EXP, $MANTISSA)) -> []byte
+    where intrinsics.type_is_float(FLOAT_T) && intrinsics.type_is_endian_little(FLOAT_T)
+{
+    float_data := float_data;
+    float_bits := transmute(MANTISSA)float_data;
+    // first bit determines +/-
+    neg := cast(u8)((float_bits >> (size_of(MANTISSA) * 8 - 1)) & 1);
+    if neg == 1 do float_data *= -1;
+    // exponent is located on exponent mask, after the sign
+    exp_bits := cast(EXP)((float_bits & offsets.exponent_mask) >> auto_cast offsets.exponent_shift);
+    // multiplied by exp_bits; 10 bit long after exp_bits
+    mantissa := (float_bits & offsets.mantissa_mask);
+
+    byte_data := make([]byte, size_of(u8) + size_of(exp_bits) + size_of(mantissa));
+    interpret_int_le_data(neg,      byte_data[:]);
+    interpret_int_le_data(exp_bits, byte_data[size_of(neg):]);
+    interpret_int_le_data(mantissa, byte_data[size_of(neg) + size_of(exp_bits):]);
     return byte_data;
 }
 
-interpret_float_be_data   :: proc { interpret_float16_be_data, interpret_float32_be_data, interpret_float64_be_data }
-interpret_float16_be_data :: proc(float_data: f16be) -> []byte {
-    byte_data := make([]byte, size_of(f16be));
-    float_bits := transmute(u16be)(float_data * math.pow(f16be(10), FLOAT_PRECISION));
-    for i: u8 = size_of(f16be); i > 0; i -= 1 do byte_data[i] = byte(float_bits >> (8 * i));
+interpret_float_be_data :: proc(float_data: $FLOAT_T, $LE_MAN: typeid, offsets: FloatOffsetsTable($EXP, $MANTISSA)) -> []byte
+    where intrinsics.type_is_float(FLOAT_T) && intrinsics.type_is_endian_big(FLOAT_T)
+{
+    float_data := float_data;
+    float_bits := transmute(MANTISSA)float_data;
+    fmt.printf("BE: %b\n", float_bits);
+    fmt.printf("LE: %b\n", transmute(LE_MAN)float_data);
+    // // first bit determines +/-
+    // neg := cast(u8)((float_bits >> (size_of(MANTISSA) * 8 - 1)) & 1);
+    // if neg == 1 do float_data *= -1;
+    // // exponent is located on exponent mask, after the sign
+    // exp_bits := cast(EXP)((float_bits & offsets.exponent_mask) >> auto_cast offsets.exponent_shift);
+    // // multiplied by exp_bits; 10 bit long after exp_bits
+    // mantissa := (float_bits & offsets.mantissa_mask);
+
+    // byte_data := make([]byte, size_of(u8) + size_of(exp_bits) + size_of(mantissa));
+    // interpret_int_le_data(neg,      byte_data[:]);
+    // interpret_int_le_data(exp_bits, byte_data[size_of(neg):]);
+    // interpret_int_le_data(mantissa, byte_data[size_of(neg) + size_of(exp_bits):]);
+    // return byte_data;
+    return {};
+}
+
+// PLATFORM
+interpret_float16_data :: #force_inline proc "odin" (float_data: f16) -> []byte {
+    byte_data := make([]byte, size_of(f16));
+    float_bits := transmute(u16)(float_data * math.pow(f16(10), cast(f16)FLOAT_PRECISION));
+    for i: u8 = size_of(f16); i > 0; i -= 1 do byte_data[i] = byte(float_bits >> (8 * i));
     return byte_data;
 }
-interpret_float32_be_data :: proc(float_data: f32be) -> []byte {
-    byte_data := make([]byte, size_of(f32be));
-    float_bits := transmute(u32be)(float_data * math.pow(f32be(10), FLOAT_PRECISION));
-    for i: u8 = size_of(f32be); i > 0; i -= 1 do byte_data[i] = byte(float_bits >> (8 * i));
+interpret_float32_data :: #force_inline proc "odin" (float_data: f32) -> []byte {
+    byte_data := make([]byte, size_of(f32));
+    float_bits := transmute(u32)(float_data * math.pow(f32(10), cast(f32)FLOAT_PRECISION));
+    for i: u8 = size_of(f32); i > 0; i -= 1 do byte_data[i] = byte(float_bits >> (8 * i));
     return byte_data;
 }
-interpret_float64_be_data :: proc(float_data: f64be) -> []byte {
-    byte_data := make([]byte, size_of(f64be));
-    float_bits := transmute(u64be)(float_data * math.pow(f64be(10), FLOAT_PRECISION));
-    for i: u8 = size_of(f64be); i > 0; i -= 1 do byte_data[i] = byte(float_bits >> (8 * i));
+interpret_float64_data :: #force_inline proc "odin" (float_data: f64) -> []byte {
+    byte_data := make([]byte, size_of(f64));
+    float_bits := transmute(u64)(float_data * math.pow(f64(10), cast(f64)FLOAT_PRECISION));
+    for i: u8 = size_of(f64); i > 0; i -= 1 do byte_data[i] = byte(float_bits >> (8 * i));
     return byte_data;
 }
-when ODIN_ENDIAN == .Big {
-    interpret_float_data :: interpret_float_be_data;
-} else {
-    interpret_float_data :: interpret_float_le_data;
-}
+
+
 /*! FLOAT */
 /* STRING */
 /**
@@ -150,7 +206,7 @@ interpret_array :: proc(arr: any, v: runtime.Type_Info_Array) -> (byte_data: []b
 
     total_size := 0;
     for it := 0; it < v.count; {
-        val, idx, fine := reflect.iterate_array(arr, &it);
+        val, _, fine := reflect.iterate_array(arr, &it);
         if !fine do break;
 
         total_size += marshall_serialized_size(val);
@@ -162,7 +218,7 @@ interpret_array :: proc(arr: any, v: runtime.Type_Info_Array) -> (byte_data: []b
     delete(length_byte_data);
     prev_pos, data_len := 8, 0;
     for it := 0; it < v.count; {
-        val, idx, fine := reflect.iterate_array(arr, &it);
+        val, _, fine := reflect.iterate_array(arr, &it);
         if !fine do break;
         
         serialized := serialize(val) or_return;
@@ -302,19 +358,7 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
             return interpret_int_data(cast(i32)base_data.(rune)), .None;
 
         case runtime.Type_Info_Float:
-            switch float_data in base_data {
-                // case f16: return interpret_float_data(float_data), .None;
-                // case f32: return interpret_float_data(float_data), .None;
-                // case f64: return interpret_float_data(float_data), .None;
-
-                case f16le: return interpret_float_le_data(float_data), .None;
-                case f32le: return interpret_float_le_data(float_data), .None;
-                case f64le: return interpret_float_le_data(float_data), .None;
-
-                case f16be: return interpret_float_be_data(float_data), .None;
-                case f32be: return interpret_float_be_data(float_data), .None;
-                case f64be: return interpret_float_be_data(float_data), .None;
-            }
+            return interpret_float_data(base_data);
 
         case runtime.Type_Info_Complex: // todo
             return nil, .InvalidType;
@@ -417,7 +461,7 @@ marshall_serialized_size :: proc(data: any) -> int {
     iterable_size :: #force_inline proc(data: any, count: int) -> int {
         byte_data_len := 0;
         for it := 0; it < count; {
-            val, idx, fine := reflect.iterate_array(data, &it);
+            val, _, fine := reflect.iterate_array(data, &it);
             if !fine do break;
             byte_data_len += marshall_serialized_size(val);
         }
@@ -459,17 +503,17 @@ marshall_serialized_size :: proc(data: any) -> int {
 
         case runtime.Type_Info_Float:
             switch float_data in data {
-                // case f16: return interpret_float_data(float_data), .None;
-                // case f32: return interpret_float_data(float_data), .None;
-                // case f64: return interpret_float_data(float_data), .None;
+                case f16:   return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16le) /* mantissa */;
+                case f32:   return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32le) /* mantissa */;
+                case f64:   return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64le) /* mantissa */;
 
-                case f16le: return 2;
-                case f32le: return 4;
-                case f64le: return 8;
+                case f16le: return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16le) /* mantissa */;
+                case f32le: return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32le) /* mantissa */;
+                case f64le: return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64le) /* mantissa */;
 
-                case f16be: return 2;
-                case f32be: return 4;
-                case f64be: return 8;
+                case f16be: return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16be) /* mantissa */;
+                case f32be: return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32be) /* mantissa */;
+                case f64be: return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64be) /* mantissa */;
             }
 
         case runtime.Type_Info_String:
@@ -687,27 +731,50 @@ when ODIN_ENDIAN == .Big {
 }
 /*! INTEGER */ 
 /* FLOAT */
+_interpret :: proc($EXP, $NEG, $MANTISSA, $OUT: typeid, bias: EXP, mantissa_max: OUT, bytes: []byte) -> OUT {
+    exp: EXP;
+    neg: NEG;
+    mantissa: MANTISSA;
+    interpret_bytes_to_int_le_data(neg,      bytes[:]);
+    interpret_bytes_to_int_le_data(exp,      bytes[size_of(neg):]);
+    interpret_bytes_to_int_le_data(mantissa, bytes[size_of(neg) + size_of(exp):]);
+    sign: OUT = neg == 1 ? -1 : 1;
+    if exp == 0 {
+        // +/- zero
+        if mantissa == 0 do return neg == 1 ? -0 : +0;
+        // subnormal values
+        else do return sign * math.pow(2, cast(OUT)(-bias + 1)) * (cast(OUT)mantissa/mantissa_max);
+    }
+    return sign * math.pow(2, cast(OUT)(exp - bias)) * (1 + cast(OUT)mantissa/mantissa_max);
+}
+
 interpret_bytes_to_float_le_data :: proc(val: any, bytes: []byte) -> Marshall_Error {
-    switch float_data in val {
-        case ^f16le:
-            data := cast(^f16le)val.data;
-            data^ = cast(f16le)(u16le(bytes[1]) | u16le(bytes[0]) << 8);
+    switch &float_data in val {
+        case f16:
+            float_data = cast(f16)(u16(bytes[1]) | u16(bytes[0]) << 8);
 
-        case ^f32le:
-            data := cast(^f32le)val.data;
-            data^ = cast(f32le)(u32le(bytes[3]) | u32le(bytes[2]) << 8 | u32le(bytes[1]) << 16 | u32le(bytes[0]) << 24) / math.pow(f32le(10), FLOAT_PRECISION);
+        case f32:
+            float_data = cast(f32)(u32(bytes[3]) | u32(bytes[2]) << 8 | u32(bytes[1]) << 16 | u32(bytes[0]) << 24) / math.pow(f32(10), cast(f32)FLOAT_PRECISION);
 
-        case ^f64le:
-            data := cast(^f64le)val.data;
-            data^ = f64le(
-                u64le(bytes[7]) << 56 | 
-                u64le(bytes[6]) << 48 |
-                u64le(bytes[5]) << 40 | 
-                u64le(bytes[4]) << 32 | 
-                u64le(bytes[3]) << 24 |
-                u64le(bytes[2]) << 16 |
-                u64le(bytes[1]) <<  8 |
-                u64le(bytes[0])) / math.pow(f64le(10), FLOAT_PRECISION);
+        case f64:
+            float_data = f64(
+                u64(bytes[7]) << 56 | 
+                u64(bytes[6]) << 48 |
+                u64(bytes[5]) << 40 | 
+                u64(bytes[4]) << 32 | 
+                u64(bytes[3]) << 24 |
+                u64(bytes[2]) << 16 |
+                u64(bytes[1]) <<  8 |
+                u64(bytes[0])) / math.pow(f64(10), cast(f64)FLOAT_PRECISION);
+
+        case f16le:
+            float_data = _interpret(EXP=i8, NEG=u8, MANTISSA=u16le, OUT=f16le, mantissa_max=1024 /* 1 << 10 */, bias=15, bytes=bytes);
+
+        case f32le:
+            float_data = _interpret(EXP=i16le, NEG=u8, MANTISSA=u32le, OUT=f32le, mantissa_max=8388608 /* 1 << 23 */ , bias=127, bytes=bytes);
+
+        case f64le:
+            float_data = _interpret(EXP=i32le, NEG=u8, MANTISSA=u64le, OUT=f64le, mantissa_max=1 << 52/* 1 << 52 */, bias=1023, bytes=bytes);
 
         case:
             return .InvalidType;
@@ -717,18 +784,33 @@ interpret_bytes_to_float_le_data :: proc(val: any, bytes: []byte) -> Marshall_Er
     return .None;
 }
 interpret_bytes_to_float_be_data :: proc(val: any, bytes: []byte) -> Marshall_Error {
-    switch float_data in val {
-        case ^f16be:
-            data := cast(^f16be)val.data;
-            data^ = cast(f16be)(u16be(bytes[1]) << 8 | u16be(bytes[0])) / math.pow(f16be(10), FLOAT_PRECISION);
+    assert(false, "dysfunctional rn");
+    switch &float_data in val {
+        case f16:
+            float_data = cast(f16)(u16(bytes[1]) << 8 | u16(bytes[0])) / math.pow(f16(10), cast(f16)FLOAT_PRECISION);
 
-        case ^f32be:
-            data := cast(^f32be)val.data;
-            data^ = cast(f32be)(u32be(bytes[3]) << 24 | u32be(bytes[2]) << 16 | u32be(bytes[1]) << 8 | u32be(bytes[0])) / math.pow(f32be(10), FLOAT_PRECISION);
+        case f32:
+            float_data = cast(f32)(u32(bytes[3]) << 24 | u32(bytes[2]) << 16 | u32(bytes[1]) << 8 | u32(bytes[0])) / math.pow(f32(10), cast(f32)FLOAT_PRECISION);
 
-        case ^f64be:
-            data := cast(^f64be)val.data;
-            data^ = f64be(
+        case f64:
+            float_data = f64(
+                u64(bytes[7]) << 8  | 
+                u64(bytes[6]) << 16 |
+                u64(bytes[5]) << 24 | 
+                u64(bytes[4]) << 32 | 
+                u64(bytes[3]) << 40 |
+                u64(bytes[2]) << 48 |
+                u64(bytes[1]) << 56 |
+                u64(bytes[0])) / math.pow(f64(10), cast(f64)FLOAT_PRECISION);
+        
+        case f16be:
+            float_data = cast(f16be)_interpret(EXP=i8, NEG=u8, MANTISSA=u16le, OUT=f16le, mantissa_max=1024 /* 1 << 10 */, bias=15, bytes=bytes);
+
+        case f32be:
+            float_data = cast(f32be)(u32be(bytes[3]) << 24 | u32be(bytes[2]) << 16 | u32be(bytes[1]) << 8 | u32be(bytes[0])) / math.pow(f32be(10), cast(f32be)FLOAT_PRECISION);
+
+        case f64be:
+            float_data = f64be(
                 u64be(bytes[7]) << 8  | 
                 u64be(bytes[6]) << 16 |
                 u64be(bytes[5]) << 24 | 
@@ -736,7 +818,7 @@ interpret_bytes_to_float_be_data :: proc(val: any, bytes: []byte) -> Marshall_Er
                 u64be(bytes[3]) << 40 |
                 u64be(bytes[2]) << 48 |
                 u64be(bytes[1]) << 56 |
-                u64be(bytes[0])) / math.pow(f64be(10), FLOAT_PRECISION);
+                u64be(bytes[0])) / math.pow(f64be(10), cast(f64be)FLOAT_PRECISION);
 
         case:
             return .InvalidType;
@@ -1008,7 +1090,7 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
         case runtime.Type_Info_Float:
             if v.endianness == .Big do return interpret_bytes_to_float_be_data(val, data);
             else if v.endianness == .Little do return interpret_bytes_to_float_le_data(val, data);
-            else do return interpret_bytes_to_int_data(val, data);
+            else do return interpret_bytes_to_float_data(val, data);
 
         case runtime.Type_Info_Complex: // todo
             return .InvalidType;
