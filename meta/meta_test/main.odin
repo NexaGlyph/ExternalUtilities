@@ -1,8 +1,12 @@
 //+build windows
 package test
 
+import meta "../../meta"
+
 main :: proc() {
-    res := Resource{};
-    res = Atlas{};
-    accept_resource_any(res);
+    meta.check_nexa_project(
+        "C:\\Programming\\Projects\\NexaGlyph\\ExternalUtilities\\meta\\meta_test\\sample_demo",
+        "C:\\Programming\\Projects\\NexaGlyph\\ExternalUtilities\\meta\\meta_test\\sample_core",
+        "C:\\Programming\\Projects\\NexaGlyph\\ExternalUtilities\\meta\\meta_test\\sample_external_utils",
+    );
 }
