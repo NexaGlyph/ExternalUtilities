@@ -23,7 +23,7 @@ Marshall_Error :: enum u8 {
     WriteError,                     // error during writing
     ReadError,                      // error during reading
     InvalidEndianness,              // unsupported endianness
-    ArraySizeMismatch,              // array size mismatch (happens during unmarshalling when static array size is not the same of the marshall buffer provided)
+    ArraySizeMismatch,              // array size mismatch (happens during unmarshalling when static array size is not the same of the marshall buffer provided, also counts for enum arrays)
     InternalAllocationError,        // this is launched when either "runtime" or "mem" package return AllocationError
     StringTooLong,                  // string length exceeds limits
     ArrayTooLong,                   // array/slice/dynarray length exceeds limits
@@ -216,7 +216,7 @@ interpret_indexable :: proc(arr: any, count: int) -> (byte_data: []byte, err: Ma
     for it := 0; it < count; {
         val, _, fine := reflect.iterate_array(arr, &it);
         if !fine do break;
-        
+
         serialized := serialize(val) or_return;
         data_len = len(serialized);
         copy_slice(byte_data[prev_pos:prev_pos + data_len], serialized);
@@ -224,6 +224,36 @@ interpret_indexable :: proc(arr: any, count: int) -> (byte_data: []byte, err: Ma
 
         prev_pos += data_len;
     }
+    return;
+}
+
+interpret_enum_array :: proc(arr: any, info: runtime.Type_Info_Enumerated_Array) -> (byte_data: []byte, err: Marshall_Error) {
+    total_size := 0;
+    if info.is_sparse do return nil, .UnknownError;
+    for it := 0; it < info.count; it += 1 {
+        total_size += marshall_serialized_size(
+            any { cast(rawptr)(uintptr(arr.data) + uintptr(it * info.elem_size)), info.elem.id },
+        );
+    }
+
+    byte_data = make([]byte, 8 + total_size);
+    length_byte_data := interpret_int_data((u64(info.count) << 32) | u64(total_size + 8));
+    copy_slice(byte_data[:8], length_byte_data);
+    delete(length_byte_data);
+    prev_pos, data_len := 8, 0;
+    for it := 0; it < info.count; it += 1 {
+        serialized := serialize(
+            any { cast(rawptr)(uintptr(arr.data) + uintptr(it * info.elem_size)), info.elem.id },
+        ) or_return;
+        data_len = len(serialized);
+        copy_slice(byte_data[prev_pos:prev_pos + data_len], serialized);
+        delete(serialized);
+
+        prev_pos += data_len;
+    }
+
+    fmt.printf("Serialized enum array: %v\n", byte_data);
+
     return;
 }
 /*! ARRAY */
@@ -357,16 +387,16 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
         case runtime.Type_Info_Array:
             return interpret_indexable(base_data, v.count);
 
-        case runtime.Type_Info_Enumerated_Array: // todo
-            return nil, .InvalidType;
+        case runtime.Type_Info_Enumerated_Array:
+            return interpret_enum_array(base_data, v);
 
-        case runtime.Type_Info_Dynamic_Array: // todo
+        case runtime.Type_Info_Dynamic_Array:
             dyn_arr := cast(^runtime.Raw_Dynamic_Array)base_data.data;
             return interpret_indexable(base_data, dyn_arr.len);
 
-        case runtime.Type_Info_Slice: // todo
+        case runtime.Type_Info_Slice:
             slice := cast(^runtime.Raw_Slice)base_data.data;
-            if slice.len > 0 do return interpret_indexable(base_data, slice.len);
+            return interpret_indexable(base_data, slice.len);
 
         case runtime.Type_Info_Parameters:
             return nil, .InvalidType;
@@ -605,7 +635,6 @@ interpret_bytes_to_int_le_data :: proc(val: any, bytes: []byte) -> Marshall_Erro
                 int(bytes[2]) << 16 |
                 int(bytes[1]) <<  8 |
                 int(bytes[0]));
-            fmt.printf("Interpreting byte data: %v; as: %v\n", bytes, data);
 
         case u8:
             data = bytes[0];
@@ -839,7 +868,6 @@ when ODIN_ENDIAN == .Big {
  */
 interpret_bytes_to_string :: proc(data: []byte) -> (string, Marshall_Error) {
     special_size: u32 = 0;
-    fmt.printf("Bytes_to_string:: %v\n", data);
     interpret_bytes_to_int_data(special_size, data[:4]);
     if u32(len(data)) - 4 != special_size do return "", .StringBufferSizeMismatch;
     return string(data[4:]), .None;
@@ -853,7 +881,7 @@ interpret_bytes_to_cstring :: proc(data: []byte) -> (cstring, Marshall_Error) {
 /* ARRAY */
 
 @(private)
-_interpret_bytes_to_indexable :: #force_inline proc(
+_interpret_bytes_to_multi_indexable :: #force_inline proc(
     val: rawptr,
     val_offset: int,
     len: int,
@@ -879,14 +907,55 @@ _interpret_bytes_to_indexable :: #force_inline proc(
         if err != .None do return .InternalAllocationError; // todo fix leakage if error'd
 
         // read the subarray
-        fmt.printf("\x1b[30mPassing a subarray of size: %v\x1b[0m\n", array_byte_size);
         deserialize(
             any { rawptr(value_data_ptr), element_id, },
             data[whole_size : whole_size + array_byte_size],
         ) or_return;
 
         whole_size += array_byte_size;
-        fmt.printf("Whole size update: %v\n", whole_size);
+    }
+    return .None;
+}
+
+@(private)
+_interpret_bytes_to_strings :: #force_inline proc(
+    val: rawptr,
+    len: int,
+    elem_size: int,
+    elem_id: typeid,
+    data: []byte,
+) -> (err: Marshall_Error) {
+    data_offset, size: u32 = 8, 0;
+    for i := 0; i < len; i += 1 {
+        // size of the data is first 4 bytes (of u32 type)
+        deserialize(size, data[data_offset : data_offset + size_of(u32)]) or_return;
+        size += 4; // size expresses rune-string length not byte-string length
+        deserialize(
+            any {
+                data = rawptr(uintptr(val) + uintptr(i * elem_size)),
+                id = elem_id,
+            },
+            data[data_offset : data_offset + size],
+        ) or_return;
+        data_offset += size;
+    }
+    return .None;
+}
+
+_interpret_bytes_to_indexable_default :: #force_inline proc(
+    val: rawptr,
+    elem_size: int,
+    elem_id: typeid,
+    len: int,
+    data: []byte,
+) -> (err: Marshall_Error) {
+    byte_elem_size := marshall_serialized_size_t(type_info_of(elem_id));
+    if byte_elem_size == -1 do return .UnknownError;
+    for i in 0..<len {
+        deserialize(
+            any { rawptr(uintptr(val) + uintptr(i * elem_size)), elem_id },
+            data[8 + i * byte_elem_size : 8 + (i + 1) * byte_elem_size],
+        ) or_return;
     }
     return .None;
 }
@@ -894,64 +963,40 @@ _interpret_bytes_to_indexable :: #force_inline proc(
 interpret_bytes_to_array :: proc(val: any, info: runtime.Type_Info_Array, data: []byte) -> (err: Marshall_Error) {
     if info.count > 0 {
         #partial switch v in info.elem.variant {
-            // requires special iteration
             case runtime.Type_Info_String:
-                fmt.printf("\x1b[31mArray len: %d;\x1b[0m Array data: %v\nData len: %v\n", info.count, val.data, len(data));
-                data_offset, size: u32 = 8, 0;
-                for i := 0; i < info.count; i += 1 {
-                    // size of the data is first 4 bytes (of u32 type)
-                    deserialize(size, data[data_offset : data_offset + size_of(u32)]) or_return;
-                    size += 4; // size expresses rune-string length not byte-string length
-                    fmt.printf("\tIteration: %d; data_offset: %d; size: %d; ", i, data_offset, size);
-                    deserialize(
-                        any {
-                            data = rawptr(uintptr(val.data) + uintptr(i * info.elem_size)),
-                            id = info.elem.id,
-                        },
-                        data[data_offset : data_offset + size],
-                    ) or_return;
-                    data_offset += size;
-                }
-                return .None;
+                return _interpret_bytes_to_strings(val.data, info.count, info.elem_size, info.elem.id, data);
 
             case runtime.Type_Info_Array:
-                fmt.printf("Type: %v\n", info.elem.id)
-                return _interpret_bytes_to_indexable(val.data, v.elem.size, info.count, info.elem.id, data);
+                return _interpret_bytes_to_multi_indexable(val.data, v.elem.size, info.count, info.elem.id, data[8:]);
 
             case runtime.Type_Info_Slice:
-                fmt.printf("Type: %v\n", info.elem.id)
-                slice := cast(^runtime.Raw_Slice)val.data;
-                return _interpret_bytes_to_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data);
+                return _interpret_bytes_to_multi_indexable(val.data, info.elem.size, info.count, info.elem.id, data[8:]);
 
             case runtime.Type_Info_Dynamic_Array:
-                fmt.printf("Type: %v\n", info.elem.id)
-                dyn_arr := cast(^runtime.Raw_Dynamic_Array)val.data;
-                return _interpret_bytes_to_indexable(dyn_arr.data, size_of(runtime.Raw_Dynamic_Array), dyn_arr.len, info.elem.id, data);
+                return _interpret_bytes_to_multi_indexable(val.data, info.elem.size, info.count, info.elem.id, data[8:]);
 
             case:
-                fmt.printf("Type: %v\n", info.elem.id)
-                for i in 0..<info.count {
-                    deserialize(
-                        any { rawptr(uintptr(val.data) + uintptr(i * info.elem_size)), info.elem.id },
-                        data[8 + i * info.elem_size : 8 + (i + 1) * info.elem_size],
-                    ) or_return;
-                }
-                return .None;
+                return _interpret_bytes_to_indexable_default(val.data, info.elem_size, info.elem.id, info.count, data);
         }
     }
     return .None;
 }
 
 interpret_bytes_to_enum_array :: #force_inline proc(val: any, info: runtime.Type_Info_Enumerated_Array, data: []byte) -> (err: Marshall_Error) {
-    return interpret_bytes_to_array(
-        val, 
-        {
-            elem = info.elem,
-            elem_size = info.elem_size,
-            count = info.count,
-        }, 
-        data,
-    );
+    enum_array := val.data;
+    elem_size := marshall_serialized_size_t(info.elem);
+    data_offset := 8;
+
+    if elem_size == -1 do return .InvalidType;
+
+    for index in 0..<info.count {
+        element_ptr := rawptr(uintptr(enum_array) + uintptr(index * info.elem_size));
+
+        deserialize(any { element_ptr, info.elem.id }, data[data_offset : data_offset + elem_size]) or_return;
+        data_offset += elem_size;
+    }
+
+    return .None;
 }
 
 interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: []byte) -> (err: Marshall_Error) {
@@ -961,9 +1006,8 @@ interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: 
         special_size: u64 = 0;
         interpret_bytes_to_int_data(special_size, data[:8]) or_return;
         slice_len := int(special_size >> 32);
-        array_byte_size := int(special_size & 0x00000000FFFFFFFF);
         slice.len = cast(int)slice_len;
-        slice_data, err := runtime.mem_alloc_bytes(array_byte_size, info.elem.align);
+        slice_data, err := runtime.mem_alloc_bytes(info.elem.size * slice_len, info.elem.align);
         if err != .None do return .InternalAllocationError;
         slice.data = raw_data(slice_data);
     } else {
@@ -975,52 +1019,29 @@ interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: 
     #partial switch v in info.elem.variant {
         // requires special iteration
         case runtime.Type_Info_String:
-            fmt.printf("\x1b[31mSlice len: %d;\x1b[0m Slice data: %v\nData len: %v\n", slice.len, data, len(data));
-            data_offset, size: u32 = 8, 0;
-            for i := 0; i < slice.len; i += 1 {
-                // size of the data is first 4 bytes (of u32 type)
-                deserialize(size, data[data_offset : data_offset + size_of(u32)]) or_return;
-                size += 4; // size expresses rune-string length not byte-string length
-                fmt.printf("\tIteration: %d; data_offset: %d; size: %d; ", i, data_offset, size);
-                deserialize(
-                    any {
-                        data = rawptr(uintptr(slice.data) + uintptr(i * info.elem_size)),
-                        id = info.elem.id,
-                    },
-                    // data[8 + i * info.elem_size : 8 + (i + 1) * info.elem_size],
-                    data[data_offset : data_offset + size],
-                ) or_return;
-                data_offset += size;
-            }
-            fmt.printf("Returning: %v\n", slice);
-            return .None;
+            return _interpret_bytes_to_strings(slice.data, slice.len, info.elem_size, info.elem.id, data);
 
         case runtime.Type_Info_Array:
-            fmt.printf("Type: %v\n", info.elem.id)
-            return _interpret_bytes_to_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
+            return _interpret_bytes_to_multi_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
 
         case runtime.Type_Info_Slice:
-            fmt.printf("Type: %v\n", info.elem.id)
-            return _interpret_bytes_to_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
+            return _interpret_bytes_to_multi_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
 
         case runtime.Type_Info_Dynamic_Array:
-            fmt.printf("Type: %v\n", info.elem.id)
-            return _interpret_bytes_to_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
+            return _interpret_bytes_to_multi_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
 
-        // default
         case:
-            fmt.printf("\x1b[31mSlice len: %d;\x1b[0m Slice data: %v\n", slice.len, data);
+            elem_size := marshall_serialized_size_t(type_info_of(info.elem.id));
+            if elem_size == -1 do return .UnknownError; // this should not happen since here should end up only types which are arbitrary and supported
             for i := 0; i < slice.len; i += 1 {
-                fmt.printf("\tIteration: %d; ", i);
                 deserialize(
                     any {
-                        data = rawptr(uintptr(slice.data) + uintptr(i * info.elem_size)),
+                        data = rawptr(uintptr(slice.data) + uintptr(i * info.elem_size)), // note: this offset is for the dynamic array, so it has to be precisely of the size_of(T), not the byte array offset!
                         id = info.elem.id,
                     },
-                    data[8 + i * info.elem_size : 8 + (i + 1) * info.elem_size],
+                    data[8 + i * elem_size : 8 + (i + 1) * elem_size],
                 ) or_return;
             }
-            fmt.printf("Returning: %v\n", slice);
             return .None;
     }
 
@@ -1034,10 +1055,9 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
         special_size: u64 = 0;
         interpret_bytes_to_int_data(special_size, data[:8]) or_return;
         dyn_arr_len := int(special_size >> 32);
-        array_byte_size := int(special_size & 0x00000000FFFFFFFF);
-        dyn_arr.len = cast(int)dyn_arr_len;
+        dyn_arr.len = dyn_arr_len;
         allocator := dyn_arr.allocator.data != nil ? dyn_arr.allocator : context.allocator;
-        dyn_arr_data, err := runtime.mem_alloc_bytes(array_byte_size, info.elem.align, allocator);
+        dyn_arr_data, err := runtime.mem_alloc_bytes(info.elem.size * dyn_arr_len, info.elem.align, allocator);
         if err != .None do return .InternalAllocationError;
         dyn_arr.data = raw_data(dyn_arr_data);
     } else {
@@ -1049,37 +1069,16 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
     #partial switch v in info.elem.variant {
         // requires special iteration
         case runtime.Type_Info_String:
-            fmt.printf("\x1b[31mdyn_arr len: %d;\x1b[0m dyn_arr data: %v\nData len: %v\n", dyn_arr.len, data, len(data));
-            data_offset, size: u32 = 8, 0;
-            for i := 0; i < dyn_arr.len; i += 1 {
-                // size of the data is first 4 bytes (of u32 type)
-                deserialize(size, data[data_offset : data_offset + size_of(u32)]) or_return;
-                size += 4; // size expresses rune-string length not byte-string length
-                fmt.printf("\tIteration: %d; data_offset: %d; size: %d; ", i, data_offset, size);
-                deserialize(
-                    any {
-                        data = rawptr(uintptr(dyn_arr.data) + uintptr(i * info.elem_size)),
-                        id = info.elem.id,
-                    },
-                    // data[8 + i * info.elem_size : 8 + (i + 1) * info.elem_size],
-                    data[data_offset : data_offset + size],
-                ) or_return;
-                data_offset += size;
-            }
-            fmt.printf("Returning: %v\n", dyn_arr);
-            return .None;
+            return _interpret_bytes_to_strings(dyn_arr.data, dyn_arr.len, info.elem_size, info.elem.id, data)
 
         case runtime.Type_Info_Array:
-            fmt.printf("Type: %v\n", info.elem.id)
-            return _interpret_bytes_to_indexable(dyn_arr.data, size_of(runtime.Raw_Dynamic_Array), dyn_arr.len, info.elem.id, data[8:]);
+            return _interpret_bytes_to_multi_indexable(dyn_arr.data, size_of(runtime.Raw_Dynamic_Array), dyn_arr.len, info.elem.id, data[8:]);
 
         case runtime.Type_Info_Slice:
-            fmt.printf("Type: %v\n", info.elem.id)
-            return _interpret_bytes_to_indexable(dyn_arr.data, size_of(runtime.Raw_Dynamic_Array), dyn_arr.len, info.elem.id, data[8:]);
+            return _interpret_bytes_to_multi_indexable(dyn_arr.data, size_of(runtime.Raw_Dynamic_Array), dyn_arr.len, info.elem.id, data[8:]);
 
         case runtime.Type_Info_Dynamic_Array:
-            fmt.printf("Type: %v\n", info.elem.id)
-            return _interpret_bytes_to_indexable(dyn_arr.data, size_of(runtime.Raw_Dynamic_Array), dyn_arr.len, info.elem.id, data[8:]);
+            return _interpret_bytes_to_multi_indexable(dyn_arr.data, size_of(runtime.Raw_Dynamic_Array), dyn_arr.len, info.elem.id, data[8:]);
         
         // todo: return unsupported type for types that cannot be serialized
 
@@ -1087,9 +1086,7 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
         case:
             elem_size := marshall_serialized_size_t(type_info_of(info.elem.id));
             if elem_size == -1 do return .UnknownError; // this should not happen since here should end up only types which are arbitrary and supported
-            fmt.printf("\x1b[31mdyn_arr len: %d;\x1b[0m elem size: %d\n dyn_arr data: %v\n", dyn_arr.len, elem_size, data);
             for i := 0; i < dyn_arr.len; i += 1 {
-                fmt.printf("\tIteration: %d; ", i);
                 deserialize(
                     any {
                         data = rawptr(uintptr(dyn_arr.data) + uintptr(i * info.elem_size)), // note: this offset is for the dynamic array, so it has to be precisely of the size_of(T), not the byte array offset!
@@ -1098,7 +1095,6 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
                     data[8 + i * elem_size : 8 + (i + 1) * elem_size],
                 ) or_return;
             }
-            fmt.printf("Returning: %v\n", dyn_arr);
             return .None;
     }
 

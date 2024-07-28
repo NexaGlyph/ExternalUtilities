@@ -23,6 +23,6 @@ run :: proc() {
     test(false);
     test(true);
 
-    fmt.println("-----------------------------k");
+    fmt.println("-----------------------------");
     fmt.println("Ending [BOOL]");
 }
