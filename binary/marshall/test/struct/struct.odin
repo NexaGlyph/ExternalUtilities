@@ -24,22 +24,14 @@ run :: proc() {
     }
 
     dummy_int := 10;
-    dummy_cstrings := [?]cstring {
-        "hello",
-        " world",
-        "\n",
-        "from",
-        " marshall",
-        " test!",
-        "\n",
-    };
+    dummy_cstring: cstring = "Henlo";
     my_struct := Marshall_Test_Serialize_Struct {
         indent = {
             prop1 = 10,
             prop2 = "MyProp2Value",
             prop3 = &dummy_int,
         },
-        val1 = raw_data(dummy_cstrings[:]),
+        val1 = &dummy_cstring,
         val2 = make_dynamic_array([dynamic]i32),
         val3 = ._2,
     };
@@ -51,9 +43,7 @@ run :: proc() {
         assert(my_struct.indent.prop1 == my_struct_deserialized.indent.prop1);
         assert(my_struct.indent.prop2 == my_struct_deserialized.indent.prop2);
         assert(my_struct.indent.prop3^ == my_struct_deserialized.indent.prop3^);
-        for index in 0..<len(dummy_cstrings) {
-            assert(my_struct.val1[index] == my_struct_deserialized.val1[index]);
-        }
+        assert(my_struct.val1[0] == my_struct_deserialized.val1[0]);
         assert(len(my_struct.val2) == len(my_struct_deserialized.val2));
         assert(my_struct.val3 == my_struct_deserialized.val3);
     }

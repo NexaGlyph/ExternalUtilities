@@ -16,7 +16,7 @@ run_slices :: proc() {
         err = marshall.deserialize(deserialized, byte_data);
         fmt.assertf(err == .None, "\x1b[34mDeserialiation\x1b[0m \x1b[31mfailed\x1b[0m with error: \x1b[31m%v\x1b[0m\n", err);
         eq_proc(slice, deserialized);
-        fmt.printf("\x1b[32mPassed...\x1b[0m slice\n");
+        fmt.printf("\x1b[32m\tPassed...\x1b[0m slice\n");
     }
     // arbitrary
     {
@@ -85,7 +85,7 @@ run_dyn_arrays :: proc() {
         err = marshall.deserialize(deserialized, byte_data);
         fmt.assertf(err == .None, "\x1b[34mDeserialiation\x1b[0m \x1b[31mfailed\x1b[0m with error: \x1b[31m%v\x1b[0m\n", err);
         eq_proc(dyn_array, deserialized);
-        fmt.printf("\x1b[32mPassed...\x1b[0m dyn_array\n");
+        fmt.printf("\x1b[32m\tPassed...\x1b[0m dyn_array\n");
     }
     // arbitrary
     {
@@ -131,7 +131,7 @@ run_fixed_arrays :: proc() {
         err = marshall.deserialize(deserialized, byte_data);
         fmt.assertf(err == .None, "\x1b[34mDeserialiation\x1b[0m \x1b[31mfailed\x1b[0m with error: \x1b[31m%v\x1b[0m\n", err);
         eq_proc(array, deserialized);
-        fmt.printf("\x1b[32mPassed...\x1b[0m fixed array\n");
+        fmt.printf("\x1b[32m\tPassed...\x1b[0m fixed array\n");
     }
     // arbitrary
     {
@@ -185,7 +185,7 @@ run_enum_arrays :: proc() {
         err = marshall.deserialize(deserialized, byte_data);
         fmt.assertf(err == .None, "\x1b[34mDeserialiation\x1b[0m \x1b[31mfailed\x1b[0m with error: \x1b[31m%v\x1b[0m\n", err);
         eq_proc(array, deserialized);
-        fmt.printf("\x1b[32mPassed...\x1b[0m fixed array\n");
+        fmt.printf("\x1b[32m\tPassed...\x1b[0m fixed array\n");
     }
 
     TestEnum :: #type enum {
@@ -209,7 +209,6 @@ run_enum_arrays :: proc() {
             .SUNDAY = 0,
         }
         test_enum_array(e, proc(e1, e2: [TestEnum]uint) {
-            fmt.printf("%v\n%v\n", e1, e2);
             for val, idx in e1 do assert(val == e2[idx]);
         });
     }
@@ -217,7 +216,7 @@ run_enum_arrays :: proc() {
 
 run :: proc() {
 
-    fmt.println("\nBeginning [INDEXABLE]", #procedure);
+    fmt.println("\nBeginning [INDEXABLE]");
     fmt.println("-----------------------------");
     run_slices();
     run_dyn_arrays();

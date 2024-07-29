@@ -252,7 +252,7 @@ interpret_enum_array :: proc(arr: any, info: runtime.Type_Info_Enumerated_Array)
         prev_pos += data_len;
     }
 
-    fmt.printf("Serialized enum array: %v\n", byte_data);
+    // fmt.printf("Serialized enum array: %v\n", byte_data);
 
     return;
 }
@@ -272,7 +272,7 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct) -> (byte_d
     byte_data_size_final := u32(0);
     for offset, index in v.offsets {
         // note: leave this "NexaTag_Marshallable" later, when "meta" package will be supported...
-        // if v.tags[index] == "NexaTag_Marshallable" {
+        if v.tags[index] == "NexaTag_Marshallable" {
             fmt.println("Before serialize");
             byte_array, s_err := serialize(any {
                 data = cast(rawptr)(uintptr(base_data.data) + offset),
@@ -283,7 +283,7 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct) -> (byte_d
             append(&byte_data_temp, StructTempData { offset = int(offset), data = byte_array });
             fmt.printf("\t%v :: %v\n", byte_data_temp[index].data, byte_array);
             byte_data_size_final += u32(len(byte_array));
-        // }
+        }
     }
     byte_data = make([]byte, byte_data_size_final);
     prev_pos := 0;
@@ -293,6 +293,7 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct) -> (byte_d
         delete(struct_data.data);
     }
 
+    fmt.printf("Returning byte data: %v\n", byte_data);
     return;
 }
 /*! STRUCT */
@@ -375,11 +376,13 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
         case runtime.Type_Info_Type_Id:
             return nil, .InvalidType;
 
-        case runtime.Type_Info_Pointer: // todo
-            return serialize(base_data.data);
+        case runtime.Type_Info_Pointer:
+            if base_data.data == nil do return nil, .None;
+            return serialize(any { base_data.data, v.elem.id }); // note: is this even allowed ??
 
-        case runtime.Type_Info_Multi_Pointer: // todo, do not forget to write its size
-            return nil, .InvalidType;
+        case runtime.Type_Info_Multi_Pointer:
+            if base_data.data == nil do return nil, .None;
+            return serialize(any { base_data.data, v.elem.id }); // note: is this even allowed ??
 
         case runtime.Type_Info_Procedure:
             return nil, .InvalidType;
@@ -437,12 +440,53 @@ serialize :: proc(data: any) -> ([]byte, Marshall_Error) {
     return nil, .UnknownError;
 }
 
+@(private)
+_marshall_serialize_float_t :: #force_inline proc "contextless" (t: ^runtime.Type_Info, v: runtime.Type_Info_Float) -> int {
+    if v.endianness == .Platform {
+        switch t.size {
+            case size_of(f16):   return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16le) /* mantissa */;
+            case size_of(f32):   return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32le) /* mantissa */;
+            case size_of(f64):   return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64le) /* mantissa */;
+        }
+    } else if v.endianness == .Little {
+        switch t.size {
+            case size_of(f16le): return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16le) /* mantissa */;
+            case size_of(f32le): return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32le) /* mantissa */;
+            case size_of(f64le): return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64le) /* mantissa */;
+        }
+    } else {
+        switch t.size {
+            case size_of(f16be): return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16be) /* mantissa */;
+            case size_of(f32be): return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32be) /* mantissa */;
+            case size_of(f64be): return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64be) /* mantissa */;
+        }
+    }
+
+    return -1;
+}
+
+@(private)
+_marshall_serialize_ptr_t :: #force_inline proc "contextless" (t: ^runtime.Type_Info, elem: ^runtime.Type_Info) -> int {
+    #partial switch vv in elem.variant {
+        case runtime.Type_Info_Integer:         return t.size;
+        case runtime.Type_Info_Enum:            return t.size;
+        case runtime.Type_Info_Rune:            return 4;
+        case runtime.Type_Info_Boolean:         return 1;
+
+        case runtime.Type_Info_Float:           return _marshall_serialize_float_t(type_info_of(elem.id), vv);
+        case runtime.Type_Info_Pointer:         return marshall_serialized_size_t(type_info_of(vv.elem.id));
+        case runtime.Type_Info_Multi_Pointer:   return marshall_serialized_size_t(type_info_of(vv.elem.id));
+    }
+
+    return -1;
+}
+
 /**
  * @brief for non-indexable and supported types, one can use this function to determine the size of the binary buffer returned by 'serialize' proc on serialization of the instance of "T" type
  * @note authors aim to discard this function once every supported type (with byte size known at compile time) will have precisely the same serialized length as its "size_of(T)"
  * @return length of the []byte array; -1 if the type's size cannot be known at compile time or is not supported
  */
-marshall_serialized_size_t :: proc(t: ^runtime.Type_Info) -> int {
+marshall_serialized_size_t :: proc "contextless" (t: ^runtime.Type_Info) -> int {
     #partial switch v in t.variant {
         case runtime.Type_Info_Integer:
             return t.size;
@@ -451,25 +495,7 @@ marshall_serialized_size_t :: proc(t: ^runtime.Type_Info) -> int {
             return t.size;
 
         case runtime.Type_Info_Float:
-            if v.endianness == .Platform {
-                switch t.size {
-                    case size_of(f16):   return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16le) /* mantissa */;
-                    case size_of(f32):   return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32le) /* mantissa */;
-                    case size_of(f64):   return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64le) /* mantissa */;
-                }
-            } else if v.endianness == .Little {
-                switch t.size {
-                    case size_of(f16le): return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16le) /* mantissa */;
-                    case size_of(f32le): return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32le) /* mantissa */;
-                    case size_of(f64le): return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64le) /* mantissa */;
-                }
-            } else {
-                switch t.size {
-                    case size_of(f16be): return size_of(u8) /* sign */ + size_of(i8)    /* exp */ + size_of(u16be) /* mantissa */;
-                    case size_of(f32be): return size_of(u8) /* sign */ + size_of(i16le) /* exp */ + size_of(u32be) /* mantissa */;
-                    case size_of(f64be): return size_of(u8) /* sign */ + size_of(i32le) /* exp */ + size_of(u64be) /* mantissa */;
-                }
-            }
+            return _marshall_serialize_float_t(t, v);
         
         case runtime.Type_Info_Boolean:
             return 1;
@@ -478,7 +504,10 @@ marshall_serialized_size_t :: proc(t: ^runtime.Type_Info) -> int {
             return t.size;
 
         case runtime.Type_Info_Pointer:
-            return t.size;
+            return _marshall_serialize_ptr_t(t, v.elem);
+        
+        case runtime.Type_Info_Multi_Pointer:
+            return _marshall_serialize_ptr_t(t, v.elem);
     }
 
     return -1;
@@ -489,7 +518,6 @@ marshall_serialized_size_t :: proc(t: ^runtime.Type_Info) -> int {
  * @return length of []byte array; -1 if id of data.id is not supported by the 'serialize' function
  */
 marshall_serialized_size :: proc(data: any) -> int {
-
     iterable_size :: #force_inline proc(data: any, count: int) -> int {
         byte_data_len := 0;
         for it := 0; it < count; {
@@ -558,7 +586,10 @@ marshall_serialized_size :: proc(data: any) -> int {
             return 1;
 
         case runtime.Type_Info_Pointer:
-            return marshall_serialized_size(data.data);
+            return marshall_serialized_size(any{ data.data, v.elem.id });
+
+        case runtime.Type_Info_Multi_Pointer:
+            return marshall_serialized_size(any{ data.data, v.elem.id }); // multi pointers cannot have (for marshall) size larger than one
 
         case runtime.Type_Info_Array:
             return iterable_size(data, v.count);
@@ -903,7 +934,7 @@ _interpret_bytes_to_multi_indexable :: #force_inline proc(
         err: mem.Allocator_Error;
         value_data_ptr.data, err = mem.alloc(cast(int)array_byte_size);
         value_data_ptr.len = int(subarray_len);
-        fmt.printf("Passing new slice data: %v\n", value_data_ptr);
+        // fmt.printf("Passing new slice data: %v\n", value_data_ptr);
         if err != .None do return .InternalAllocationError; // todo fix leakage if error'd
 
         // read the subarray
@@ -1011,7 +1042,7 @@ interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: 
         if err != .None do return .InternalAllocationError;
         slice.data = raw_data(slice_data);
     } else {
-        fmt.printf("Slice length deduced! [%v]\nSlice data: [%v]\n", slice.len, slice.data);
+        // fmt.printf("Slice length deduced! [%v]\nSlice data: [%v]\n", slice.len, slice.data);
     }
 
     if slice.len == 0 do return .None;
@@ -1061,7 +1092,7 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
         if err != .None do return .InternalAllocationError;
         dyn_arr.data = raw_data(dyn_arr_data);
     } else {
-        fmt.printf("Dynamic array length deduced! [%v]\ndyn_arr data: [%v]\n", dyn_arr.len, dyn_arr.data);
+        // fmt.printf("Dynamic array length deduced! [%v]\ndyn_arr data: [%v]\n", dyn_arr.len, dyn_arr.data);
     }
 
     if dyn_arr.len == 0 do return .None; // if it still has size of 0, then that means that array of len == 0 was serialized
@@ -1182,31 +1213,32 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
             return .InvalidType;
 
         case runtime.Type_Info_Pointer:
+            if len(data) == 0 do return nil;
             return deserialize(
                 any { data = val.data, id = v.elem.id, },
                 data
             );
 
         case runtime.Type_Info_Multi_Pointer:
-            return .InvalidType;
+            if len(data) == 0 do return nil;
+            return deserialize(
+                any { data = val.data, id = v.elem.id, },
+                data
+            );
 
         case runtime.Type_Info_Procedure:
             return .InvalidType;
 
         case runtime.Type_Info_Array:
-            fmt.println("hellope array");
             return interpret_bytes_to_array(val, v, data);
 
         case runtime.Type_Info_Enumerated_Array:
-            fmt.println("hellope enum array");
             return interpret_bytes_to_enum_array(val, v, data);
 
         case runtime.Type_Info_Dynamic_Array:
-            fmt.println("hellope dyn array");
             return interpret_bytes_to_dyn_array(val, v, data);
 
         case runtime.Type_Info_Slice:
-            fmt.println("hellope slice");
             return interpret_bytes_to_slice(val, v, data);
 
         case runtime.Type_Info_Parameters:
