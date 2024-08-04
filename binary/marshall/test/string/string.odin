@@ -38,6 +38,6 @@ run :: proc() {
     test_cstring("Some String");
     test_cstring("d4wad8wa48c48sa87 23qe12\n\t\r");
 
-    fmt.println("-----------------------------\n");
+    fmt.println("-----------------------------");
     fmt.println("Ending [STRING]\n");
 }

@@ -185,7 +185,7 @@ run_enum_arrays :: proc() {
         err = marshall.deserialize(deserialized, byte_data);
         fmt.assertf(err == .None, "\x1b[34mDeserialiation\x1b[0m \x1b[31mfailed\x1b[0m with error: \x1b[31m%v\x1b[0m\n", err);
         eq_proc(array, deserialized);
-        fmt.printf("\x1b[32m\tPassed...\x1b[0m fixed array\n");
+        fmt.printf("\x1b[32m\tPassed...\x1b[0m enum array\n");
     }
 
     TestEnum :: #type enum {

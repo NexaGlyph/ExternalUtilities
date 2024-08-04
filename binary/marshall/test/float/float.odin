@@ -26,7 +26,7 @@ run :: proc() {
         fmt.assertf(val == deserialized, "\x1b[34mdeserialiation\x1b[0m \x1b[31mfailed\x1b[0m; two conflicting values: %v :: %v", val, deserialized);
     }
 
-    fmt.printf("\nBeginning [%s]\n", #procedure);
+    fmt.printf("\nBeginning [FLOAT]\n");
     fmt.printf("-----------------------------\n");
 
     for _ in 0..<100 do test(f16le);
@@ -51,5 +51,5 @@ run :: proc() {
     // fmt.printf("\t\x1b[32mPassed...\x1b[0m %v\n", type_info_of(f64));
 
     fmt.printf("-----------------------------\n");
-    fmt.printf("Ending [%s]\n", #procedure);
+    fmt.printf("Ending [FLOAT]\n");
 }
