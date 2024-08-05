@@ -47,5 +47,8 @@ main_thread :: proc() {
  * 1. ought to be without context.user_ptr access...
  */
 @(NexaAttr_CoreInit)
-init :: proc() {
+init :: proc() -> int {
+    val :: 5;
+    _ = context.user_ptr; // should assert here
+    return val;
 }
