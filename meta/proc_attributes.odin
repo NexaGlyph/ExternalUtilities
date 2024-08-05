@@ -14,29 +14,68 @@ package_active_file_changed :: proc(pckg: ^PackageContext, src: string) {
 // API CALL
 check_attribute_api_call :: proc(
     call_type: CustomProcAttributeType,
-    project: ^ProjectContext,
     decl_spec: CustomProcAttributeDeclSpec,
     pckg: ^PackageContext,
     location: string,
 ) {
-    todo();
+    api_call_attribute := append_attribute();
+    api_call_attribute^.decl_spec = decl_spec;
+    api_call_attribute^.attr_type = call_type;
+    api_call_attribute^.pckg = pckg;
+    api_call_attribute^.resolved = false; // will be resolved once we find parse all the functions in all packages
+    api_call_attribute^.location = location;
 }
 //! API CALL
 
 // DEBUG ONLY
 check_attribute_debug_only :: proc(
-    project: ^ProjectContext,
     decl_spec: CustomProcAttributeDeclSpec,
+    ast_file: ^ast.File,
     pckg: ^PackageContext,
     location: string,
 ) {
-    todo();
+    debug_only_attribute := append_attribute();
+    debug_only_attribute^.decl_spec = decl_spec;
+    debug_only_attribute^.attr_type = .DEBUG_ONLY;
+    debug_only_attribute^.pckg = pckg;
+    debug_only_attribute^.location = location;
+
+    inspect_attribute_debug_only(debug_only_attribute, ast_file);
+
+    debug_only_attribute^.resolved = true;
+}
+
+inspect_attribute_debug_only :: proc(debug_only_attribute: ^CustomProcAttribute, ast_file: ^ast.File) {
+    parse_when_cond :: proc(expr: ast.Any_Expr) -> ^ast.Ident {
+        // expressions possible:
+        // Paren_Expr <-> Binary_Expr/Unary_Expr <-> Ident ("NexaConst_Debug")
+        ident: ^ast.Ident;
+        ok: bool;
+        #partial switch e in expr {
+            case ^ast.Paren_Expr:
+                ident, ok = e.expr.derived_expr.(^ast.Ident);
+            case ^ast.Binary_Expr:
+                ident, ok = e.left.derived_expr.(^ast.Ident); //note: what about Yoda notation ?????
+            case ^ast.Unary_Expr:
+                ident, ok = e.expr.derived_expr.(^ast.Ident);
+                debug_assert_cleanup(ok, "Failed to parse 'when' condition! It seems that the logic is too obscure to evaluate the primitve check for 'NexaConst_Debug'");
+        }
+        return ident;
+    }
+    for decl in ast_file^.decls {
+        #partial switch d in decl^.derived_stmt {
+            case ^ast.When_Stmt:
+                ident := parse_when_cond(d.cond.derived_expr);
+                debug_assert_ignore(false, "%v", ident.name);
+                if ident.name == "ODIN_DEBUG" || ident.name == "NexaConst_Debug" {
+                }
+        }
+    }
 }
 //! DEBUG ONLY
 
 // MAIN THREAD ONLY
 check_attribute_main_thread :: proc(
-    project: ^ProjectContext,
     decl_spec: CustomProcAttributeDeclSpec,
     pckg: ^PackageContext,
     location: string,
@@ -47,15 +86,15 @@ check_attribute_main_thread :: proc(
 
 // LAUNCHER ENTRY
 check_attribute_launcher_entry :: proc(
-    project: ^ProjectContext,
     decl_spec: CustomProcAttributeDeclSpec,
     pckg: ^PackageContext,
     location: string,
 ) {
     // project^.launcher_entry can be only one, so this block should never be executed once the launcher_entry is populated
+    project := cast(^ProjectContext)context.user_ptr;
     if project^.launcher_entry == nil {
         // set the application entry to the project context
-        project^.launcher_entry = append_attribute(project);
+        project^.launcher_entry = append_attribute();
         project^.launcher_entry^.decl_spec = decl_spec;
         project^.launcher_entry^.attr_type = .LAUNCHER_ENTRY;
         project^.launcher_entry^.pckg = pckg;
@@ -73,21 +112,21 @@ check_attribute_launcher_entry :: proc(
 }
 
 check_attribute_launcher_entry_schema :: proc() {
-    assert(false, "todo");
+    todo();
 }
 //! LAUNCHER ENTRY
 
 // APP ENTRY
 check_attribute_application_entry :: proc(
-    project: ^ProjectContext,
     decl_spec: CustomProcAttributeDeclSpec,
     pckg: ^PackageContext,
     location: string,
 ) {
     // project^.app_entry can be only one, so this block should never be executed once the app_entry is populated
+    project := cast(^ProjectContext)context.user_ptr;
     if project^.app_entry == nil {
         // set the application entry to the project context
-        project^.app_entry = append_attribute(project);
+        project^.app_entry = append_attribute();
         project^.app_entry^.decl_spec = decl_spec;
         project^.app_entry^.attr_type = .APPLICATION_ENTRY;
         project^.app_entry^.pckg = pckg;
@@ -106,7 +145,6 @@ check_attribute_application_entry :: proc(
 
 // INLINE
 check_attribute_inline :: proc(
-    project: ^ProjectContext,
     decl_spec: CustomProcAttributeDeclSpec,
     pckg: ^PackageContext,
     location: string,
@@ -119,7 +157,7 @@ check_attribute_inline :: proc(
         );
         return; // do not register when it is useless
     }
-    inline_attr := append_attribute(project);
+    inline_attr := append_attribute();
     inline_attr^.decl_spec = decl_spec;
     inline_attr^.attr_type = .INLINE;
     inline_attr^.pckg = pckg;
@@ -128,22 +166,24 @@ check_attribute_inline :: proc(
 }
 
 modify_proc_inline :: proc() {
+    todo();
 }
 //! INLINE
 
 // CORE INIT
 check_attribute_core_init :: proc(
-    project: ^ProjectContext,
     decl_spec: CustomProcAttributeDeclSpec,
     pckg: ^PackageContext,
     location: string,
 ) {
-    core_init_attr := append_attribute(project);
+    core_init_attr := append_attribute();
     core_init_attr^.decl_spec = decl_spec;
     core_init_attr^.attr_type = .CORE_INIT;
     core_init_attr^.pckg = pckg;
     core_init_attr^.location = location;
+
     inspect_attribute_core_init(decl_spec.proc_decl.body.derived_stmt);
+
     core_init_attr^.resolved = true;
 }
 

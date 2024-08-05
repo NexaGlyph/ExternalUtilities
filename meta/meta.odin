@@ -122,7 +122,8 @@ dump_project :: #force_inline proc(project: ^ProjectContext) {
     delete(project^.attributes);
 }
 
-append_attribute :: #force_inline proc(project: ^ProjectContext) -> ^CustomProcAttribute {
+append_attribute :: #force_inline proc() -> ^CustomProcAttribute {
+    project := cast(^ProjectContext)context.user_ptr;
     append(&project^.attributes, CustomProcAttribute {});
     return &project^.attributes[len(project^.attributes) - 1];
 }
@@ -228,17 +229,28 @@ format_debug_info_from_decl_spec_proc :: proc(decl_spec: CustomProcAttributeDecl
 format_debug_info_from_decl_spec :: proc { format_debug_info_from_decl_spec_proc, format_debug_info_from_decl_spec_struct, }
 
 check_file :: proc(p: ^parser.Parser, ast_file: ^ast.File, pckg: ^PackageContext) {
-    for decl in ast_file.decls {
-        #partial switch d in decl.derived {
-            case ^ast.Value_Decl:
-                #partial switch expr in d.values[0].derived_expr {
-                    case ^ast.Proc_Lit:
-                        check_attributes_proc(d, expr, ast_file, pckg);
-                    case ^ast.Struct_Type:
-                        check_tags_struct(d, expr, ast_file, pckg);
-                }
+    _internal_iterate_decls :: proc(p: ^parser.Parser, decls: []^ast.Stmt, ast_file: ^ast.File, pckg: ^PackageContext) {
+        for decl in decls {
+            #partial switch d in decl.derived {
+                case ^ast.Value_Decl:
+                    #partial switch expr in d.values[0].derived_expr {
+                        case ^ast.Proc_Lit:
+                            check_attributes_proc(d, expr, ast_file, pckg);
+                        case ^ast.Struct_Type:
+                            check_tags_struct(d, expr, ast_file, pckg);
+                    }
+                case ^ast.When_Stmt:
+                    body_block, ok := d.body.derived_stmt.(^ast.Block_Stmt);
+                    debug_assert_abort(ok, "Internal error. This call should always pass...");
+                    _internal_iterate_decls(p, body_block.stmts, ast_file, pckg);
+                    body_block, ok  = d.else_stmt.derived_stmt.(^ast.Block_Stmt);
+                    debug_assert_abort(ok, "Internal error. This call should always pass...");
+                    _internal_iterate_decls(p, body_block.stmts, ast_file, pckg);
+            }
         }
     }
+
+    _internal_iterate_decls(p, ast_file^.decls[:], ast_file, pckg);
 }
 
 check_tags_struct :: proc(d: ^ast.Value_Decl, ast_struct: ^ast.Struct_Type, ast_file: ^ast.File, pckg: ^PackageContext) {
@@ -276,7 +288,15 @@ check_attributes_proc_fielded :: proc(
             *   2. "external" ... can be accessed outside NexaCore
             */
             case "NexaAttr_APICall":
-                assert(false, "TODO");
+                if lit.tok.text == `"internal"` do check_attribute_api_call(.API_CALL_INTERNAL, decl_spec, pckg, ast_file^.fullpath);
+                else if lit.tok.text == `"external"` do check_attribute_api_call(.API_CALL_EXTERNAL, decl_spec, pckg, ast_file^.fullpath);
+                else {
+                    debug_assert_ignore(
+                        false,
+                        "Invalid type of 'APICall' specifier provided!\nExpected [internal] or [external], but received [%s]",
+                        lit.tok.text
+                    );
+                }
             case:
                 // note: maybe should be only warned, not error'd
                 assert(false, "Unknown attribute");
@@ -292,56 +312,59 @@ check_attributes_proc_non_fielded :: proc(
     ident, ok := expr.derived.(^ast.Ident);
     if !ok do return;
     fmt.printf("Ident name: %s\n", ident.name);
-    project := cast(^ProjectContext)context.user_ptr;
     switch ident.name {
         /**
         * @brief automatically assumes "internal" ident, see NexaAttr_APICall below
         */
         case "NexaAttr_APICall":
-            check_attribute_api_call(.API_CALL_INTERNAL, project, decl_spec, pckg, ast_file^.fullpath);
+            check_attribute_api_call(.API_CALL_INTERNAL, decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief this attribute tells meta to treat the proc as only defined in Debug modes (Debug/DebugX)
         */
         case "NexaAttr_DebugOnly":
-            check_attribute_debug_only(project, decl_spec, pckg, ast_file^.fullpath);
+            check_attribute_debug_only(decl_spec, ast_file, pckg, ast_file^.fullpath);
             package_active_file_changed(pckg, ast_file^.src);
         /**
         * @brief marks function to be called from application (main) thread
         */
         case "NexaAttr_MainThreadOnly":
-            check_attribute_main_thread(project, decl_spec, pckg, ast_file^.fullpath);
+            check_attribute_main_thread(decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief unique attribute; defines a function that should be bound to "core.extern_launch"
         */
         case "NexaAttr_LauncherEntry":
-            check_attribute_launcher_entry(project, decl_spec, pckg, ast_file^.fullpath);
+            check_attribute_launcher_entry(decl_spec, pckg, ast_file^.fullpath);
             package_active_file_changed(pckg, ast_file^.src);
         /**
         * @brief unique attribute; defines a function that should be bound to "core.extern_main"
         */
         case "NexaAttr_ApplicationEntry":
-            check_attribute_application_entry(project, decl_spec, pckg, ast_file^.fullpath);
+            check_attribute_application_entry(decl_spec, pckg, ast_file^.fullpath);
             package_active_file_changed(pckg, ast_file^.src);
         /**
         * @brief marks function to be "inlined" (same as #force_inline)
         */
         case "NexaAttr_Inline":
-            check_attribute_inline(project, decl_spec, pckg, ast_file^.fullpath);
+            check_attribute_inline(decl_spec, pckg, ast_file^.fullpath);
             package_active_file_changed(pckg, ast_file^.src);
         /**
         * @brief function that has prohibited access (this can be only done on "NexaAttr_APICall" procs) to NexaContext since this proc is/could be called BEFORE context init
         */
         case "NexaAttr_CoreInit":
-            check_attribute_core_init(project, decl_spec, pckg, ast_file^.fullpath);
+            check_attribute_core_init(decl_spec, pckg, ast_file^.fullpath);
         // ignore all others
     }
 }
 
 collapse_unresolved :: proc() {
     project := cast(^ProjectContext)context.user_ptr;
-    for attr in project^.attributes {
+    for &attr in project^.attributes {
         if !attr.resolved {
             #partial switch attr.attr_type {
+                case .API_CALL_EXTERNAL:
+                    resolve_api_call_external(&attr);
+                case .API_CALL_INTERNAL:
+                    resolve_api_call_internal(&attr);
                 case .APPLICATION_ENTRY:
                     resolve_app_entry();
                 case .LAUNCHER_ENTRY:
@@ -353,6 +376,77 @@ collapse_unresolved :: proc() {
         }
     }
 }
+
+/** @brief should check all packages "outisde" the defined package (but also checks whether it is used inside, if yes, should warn) */
+resolve_api_call_external :: proc(attr: ^CustomProcAttribute) {
+    project := cast(^ProjectContext)context.user_ptr;
+    for &pckg in project^.packages {
+        if attr^.pckg == &pckg { // does not matter that the call is "external", the function does not have to be used at all BUT it cannot be used inside the package
+            debug_assert_ignore(
+                !check_proc_usage(&pckg, attr^.decl_spec.proc_decl.derived_expr), 
+                "Failed to resolve api call external for: %v\n", attr,
+            );
+            attr^.resolved = true;
+            return;
+        }
+        for &subpackage in pckg.subpackages {
+            if attr^.pckg == &subpackage {
+                debug_assert_ignore(
+                    !check_proc_usage(&subpackage, attr^.decl_spec.proc_decl.derived_expr), 
+                    "Failed to resolve api call external for: %v\n", attr,
+                );
+                attr^.resolved = true;
+                return;
+            }
+        }
+    }
+    debug_assert_abort(false, "Unexpected error: attribute was not found among packages or their descendats!");
+}
+
+resolve_api_call_internal :: proc(attr: ^CustomProcAttribute) {
+    project := cast(^ProjectContext)context.user_ptr;
+    for &pckg in project^.packages {
+        if attr^.pckg != &pckg { // does not matter that the call is "external", the function does not have to be used at all BUT it cannot be used inside the package
+            debug_assert_ignore(
+                !check_proc_usage(&pckg, attr^.decl_spec.proc_decl.derived_expr), 
+                "Failed to resolve api call external for: %v\n", attr,
+            );
+            attr^.resolved = true;
+            return;
+        }
+        for &subpackage in pckg.subpackages {
+            if attr^.pckg != &subpackage {
+                debug_assert_ignore(
+                    !check_proc_usage(&subpackage, attr^.decl_spec.proc_decl.derived_expr), 
+                    "Failed to resolve api call external for: %v\n", attr,
+                );
+                attr^.resolved = true;
+                return;
+            }
+        }
+    }
+    debug_assert_abort(false, "Unexpected error: attribute was not found among packages or their descendats!");
+}
+
+/** @brief checks usage of certain procedure in a package */
+check_proc_usage_folder :: proc(pckg: ^PackageContext, expr: ast.Any_Expr) -> bool {
+    for file in pckg^.files {
+        fmt.printf("Expression to get proc_name from: %v\n", expr);
+        if check_proc_usage(file, "") do return true;
+    }
+    for &subpackage in pckg^.subpackages {
+        if check_proc_usage_folder(&subpackage, expr) do return true;
+    }
+    return false;
+}
+
+//todo: more optimal way of doing this!!
+/** @brief checks usage of certain procedure in a file */
+check_proc_usage_file :: #force_inline proc(file_src: string, proc_name: string) -> bool {
+    return strings.contains(file_src, proc_name);
+} 
+
+check_proc_usage :: proc { check_proc_usage_file, check_proc_usage_folder }
 
 resolve_app_entry :: proc() {
     project := cast(^ProjectContext)context.user_ptr;
