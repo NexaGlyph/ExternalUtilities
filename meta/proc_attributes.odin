@@ -1,6 +1,8 @@
 //+build windows
 package meta
 
+import "core:io"
+import "core:os"
 import "core:fmt"
 import "core:strings"
 import "core:odin/ast"
@@ -40,37 +42,68 @@ check_attribute_debug_only :: proc(
     debug_only_attribute^.pckg = pckg;
     debug_only_attribute^.location = location;
 
-    inspect_attribute_debug_only(debug_only_attribute, ast_file);
+    debug_assert_cleanup(
+        inspect_attribute_debug_only(debug_only_attribute, ast_file),
+        "Function marked as 'debug only' is not located inside debug when statement!\nFunction: %v\n",
+        format_debug_info_from_decl_spec(decl_spec),
+    );
 
     debug_only_attribute^.resolved = true;
 }
 
-inspect_attribute_debug_only :: proc(debug_only_attribute: ^CustomProcAttribute, ast_file: ^ast.File) {
-    parse_when_cond :: proc(expr: ast.Any_Expr) -> ^ast.Ident {
+inspect_attribute_debug_only :: proc(debug_only_attribute: ^CustomProcAttribute, ast_file: ^ast.File) -> bool {
+    _parse_when_cond :: proc(expr: ast.Any_Expr) -> (ident: ^ast.Ident, reversed: bool) {
         // expressions possible:
         // Paren_Expr <-> Binary_Expr/Unary_Expr <-> Ident ("NexaConst_Debug")
-        ident: ^ast.Ident;
         ok: bool;
         #partial switch e in expr {
             case ^ast.Paren_Expr:
                 ident, ok = e.expr.derived_expr.(^ast.Ident);
+                debug_assert_abort(false, "Complex expression parsing and boolean eval is not yet supported for NexaAttr_DebugOnly; Please just use 'when NexaConst_Debug'");
             case ^ast.Binary_Expr:
                 ident, ok = e.left.derived_expr.(^ast.Ident); //note: what about Yoda notation ?????
+                debug_assert_abort(false, "Complex expression parsing and boolean eval is not yet supported for NexaAttr_DebugOnly; Please just use 'when NexaConst_Debug'");
             case ^ast.Unary_Expr:
                 ident, ok = e.expr.derived_expr.(^ast.Ident);
+                if e.op.kind == .Not do reversed = true;
                 debug_assert_cleanup(ok, "Failed to parse 'when' condition! It seems that the logic is too obscure to evaluate the primitve check for 'NexaConst_Debug'");
+            case ^ast.Ident:
+                ident = e;
+            case:
+                debug_assert_cleanup(false, "Invalid expression when parsing when block! %v\n", e);
         }
-        return ident;
+        return;
     }
+
+    _interate_decls_for_debug_only_proc :: proc(stmts: []^ast.Stmt, debug_only_attribute: CustomProcAttributeDeclSpec) -> bool {
+        for stmt in stmts {
+            #partial switch s in stmt^.derived {
+                case ^ast.Value_Decl:
+                    if proc_expr, ok := s.values[0].derived_expr.(^ast.Proc_Lit); ok {
+                        if proc_expr == debug_only_attribute.proc_decl do return true;
+                    }
+            }
+        }
+        return false;
+    }
+
     for decl in ast_file^.decls {
         #partial switch d in decl^.derived_stmt {
             case ^ast.When_Stmt:
-                ident := parse_when_cond(d.cond.derived_expr);
-                debug_assert_ignore(false, "%v", ident.name);
+                ident, reversed := _parse_when_cond(d.cond.derived_expr);
                 if ident.name == "ODIN_DEBUG" || ident.name == "NexaConst_Debug" {
+                    stmts: []^ast.Stmt;
+                    if reversed { // else block is where the function should be
+                        stmts = d.else_stmt.derived_stmt.(^ast.Block_Stmt).stmts;
+                    } else {
+                        stmts = d.body.derived_stmt.(^ast.Block_Stmt).stmts;
+                    }
+                    if _interate_decls_for_debug_only_proc(stmts, debug_only_attribute^.decl_spec) do return true;
                 }
         }
     }
+
+    return false;
 }
 //! DEBUG ONLY
 
@@ -80,7 +113,7 @@ check_attribute_main_thread :: proc(
     pckg: ^PackageContext,
     location: string,
 ) {
-    todo();
+    not_yet_implemented();
 }
 //! MAIN THREAD ONLY
 
@@ -158,15 +191,33 @@ check_attribute_inline :: proc(
         return; // do not register when it is useless
     }
     inline_attr := append_attribute();
-    inline_attr^.decl_spec = decl_spec;
-    inline_attr^.attr_type = .INLINE;
-    inline_attr^.pckg = pckg;
-    inline_attr^.resolved = true;
-    inline_attr^.location = location;
+    inline_attr^ = CustomProcAttribute {
+        decl_spec = decl_spec,
+        attr_type = .INLINE,
+        pckg = pckg,
+        resolved = true,
+        location = location,
+    };
+    modify_proc_inline(decl_spec.proc_decl, pckg, location);
 }
 
-modify_proc_inline :: proc() {
-    todo();
+modify_proc_inline :: proc(proc_decl: ^ast.Proc_Lit, pckg: ^PackageContext, location: string) {
+    // access writer for the specific file 
+    handle, ok := os.open(location, os.O_WRONLY);
+    debug_assert_cleanup(ok == os.ERROR_NONE, "Failed to open file %s\nFile open error: %v\n", location, ok);
+    defer os.close(handle);
+    writer := os.stream_from_handle(handle);
+    // we have to always reset the buffer for the writer with the one that has the 'original' file, a.k.a authors code
+    end := proc_decl.body.derived_stmt.(^ast.Block_Stmt)^.open.offset;
+    begin := proc_decl.pos.offset;
+    gb := gap_buffer_init(end - begin);
+    gap_buffer_copy(&gb, pckg^.active_file[begin:end]);
+    // todo: tprintf instead of this ...
+    gap_buffer_insert(&gb, 0, "#force_inline ");
+    io.write_string(writer, pckg^.active_file[:begin]);
+    io.write_string(writer, gap_buffer_to_string(&gb)); 
+    io.write_string(writer, pckg^.active_file[end:]);
+    gap_buffer_dump(&gb);
 }
 //! INLINE
 

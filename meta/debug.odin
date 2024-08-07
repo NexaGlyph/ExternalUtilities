@@ -30,7 +30,7 @@ debug_assert :: proc(notification: AppNotification, condition: bool, formatted_s
             debug_runtime_assert(condition, formatted_string, args);
         case .CleanUp:
             if !condition {
-                //todo: access NexaContext via "context.user_ptr" and clean the resources; the API should handle the exit
+                revert_changes();
                 debug_abort_assert(false, formatted_string, args);
             }
         case .CanAbort:
@@ -58,4 +58,8 @@ debug_abort_assert :: #force_inline proc(condition: bool, formatted_string: stri
 
 todo :: #force_inline proc(location := #caller_location) {
     debug_abort_assert(false, "[%s]: TODO!", location);
+}
+
+not_yet_implemented :: #force_inline proc(location := #caller_location) {
+    debug_runtime_assert(false, "[%s]: This functionality is not yet implemented!", location);
 }

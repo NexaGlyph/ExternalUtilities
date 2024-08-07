@@ -193,13 +193,13 @@ check_folder :: proc(folder_info: os.File_Info) -> (pckg: PackageContext) {
         pckg.active_file = &pckg.files[index];
         if file_info.is_dir do append(&pckg.subpackages, check_folder(file_info));
         else {
-            handle, err = os.open(file_info.fullpath, os.O_RDWR);
-            defer os.close(handle);
+            handle, err = os.open(file_info.fullpath, os.O_RDONLY);
             fmt.assertf(err == os.ERROR_NONE, "Failed to read file(%s)! [Err: %v]\n", file_info.fullpath, err);
             reader = os.stream_from_handle(handle);
 
             file_buffer = make([]u8, file_info.size);
             l, e := io.read_full(reader, file_buffer[:]);
+            os.close(handle);
             fmt.assertf(l == len(file_buffer) && e == .None, "Failed to read buffer! Error: %v; Lengths: %d :: %d", e, l, len(file_buffer));
             ast_file = ast.File{
                 src = string(file_buffer),
@@ -223,8 +223,7 @@ format_debug_info_from_decl_spec_struct :: proc(decl_spec: CustomStructTagDeclSp
     return "";
 }
 format_debug_info_from_decl_spec_proc :: proc(decl_spec: CustomProcAttributeDeclSpec) -> string {
-    assert(false, "TODO");
-    return "";
+    return fmt.tprintf("Attribute: %v;\nProc: %v\n", decl_spec.attribute, decl_spec.proc_decl);
 }
 format_debug_info_from_decl_spec :: proc { format_debug_info_from_decl_spec_proc, format_debug_info_from_decl_spec_struct, }
 
@@ -243,9 +242,11 @@ check_file :: proc(p: ^parser.Parser, ast_file: ^ast.File, pckg: ^PackageContext
                     body_block, ok := d.body.derived_stmt.(^ast.Block_Stmt);
                     debug_assert_abort(ok, "Internal error. This call should always pass...");
                     _internal_iterate_decls(p, body_block.stmts, ast_file, pckg);
-                    body_block, ok  = d.else_stmt.derived_stmt.(^ast.Block_Stmt);
-                    debug_assert_abort(ok, "Internal error. This call should always pass...");
-                    _internal_iterate_decls(p, body_block.stmts, ast_file, pckg);
+                    if d.else_stmt != nil {
+                        body_block, ok  = d.else_stmt.derived_stmt.(^ast.Block_Stmt);
+                        debug_assert_abort(ok, "Internal error. This call should always pass...");
+                        _internal_iterate_decls(p, body_block.stmts, ast_file, pckg);
+                    }
             }
         }
     }
@@ -314,16 +315,15 @@ check_attributes_proc_non_fielded :: proc(
     fmt.printf("Ident name: %s\n", ident.name);
     switch ident.name {
         /**
-        * @brief automatically assumes "internal" ident, see NexaAttr_APICall below
+        * @brief automatically assumes "internal" ident, see NexaAttr_APICall fielded
         */
         case "NexaAttr_APICall":
             check_attribute_api_call(.API_CALL_INTERNAL, decl_spec, pckg, ast_file^.fullpath);
         /**
-        * @brief this attribute tells meta to treat the proc as only defined in Debug modes (Debug/DebugX)
+        * @brief this attribute tells meta to expect the proc as only defined in Debug modes (Debug/DebugX)
         */
         case "NexaAttr_DebugOnly":
             check_attribute_debug_only(decl_spec, ast_file, pckg, ast_file^.fullpath);
-            package_active_file_changed(pckg, ast_file^.src);
         /**
         * @brief marks function to be called from application (main) thread
         */
@@ -333,20 +333,20 @@ check_attributes_proc_non_fielded :: proc(
         * @brief unique attribute; defines a function that should be bound to "core.extern_launch"
         */
         case "NexaAttr_LauncherEntry":
-            check_attribute_launcher_entry(decl_spec, pckg, ast_file^.fullpath);
             package_active_file_changed(pckg, ast_file^.src);
+            check_attribute_launcher_entry(decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief unique attribute; defines a function that should be bound to "core.extern_main"
         */
         case "NexaAttr_ApplicationEntry":
-            check_attribute_application_entry(decl_spec, pckg, ast_file^.fullpath);
             package_active_file_changed(pckg, ast_file^.src);
+            check_attribute_application_entry(decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief marks function to be "inlined" (same as #force_inline)
         */
         case "NexaAttr_Inline":
-            check_attribute_inline(decl_spec, pckg, ast_file^.fullpath);
             package_active_file_changed(pckg, ast_file^.src);
+            check_attribute_inline(decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief function that has prohibited access (this can be only done on "NexaAttr_APICall" procs) to NexaContext since this proc is/could be called BEFORE context init
         */

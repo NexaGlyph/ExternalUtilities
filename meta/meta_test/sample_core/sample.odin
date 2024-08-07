@@ -29,7 +29,7 @@ api_proc :: proc() {
 api_proc2 :: proc() {
 }
 
-when (ODIN_DEBUG == true) {
+when ODIN_DEBUG {
 
 /**
  * 1. should be automatically put inside NexaConst_Debug and NexaConst_DebugX blocks
