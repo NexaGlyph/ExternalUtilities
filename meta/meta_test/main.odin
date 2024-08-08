@@ -1,12 +1,11 @@
 //+build windows
 package test
 
+import "core:os"
+
 import meta "../../meta"
 
 main :: proc() {
-    meta.check_nexa_project(
-        "C:\\Programming\\Projects\\NexaGlyph\\ExternalUtilities\\meta\\meta_test\\sample_demo",
-        "C:\\Programming\\Projects\\NexaGlyph\\ExternalUtilities\\meta\\meta_test\\sample_core",
-        "C:\\Programming\\Projects\\NexaGlyph\\ExternalUtilities\\meta\\meta_test\\sample_external_utils",
-    );
+    meta.debug_assert_abort(len(os.args) >= 4, "Invalid number of arguments!");
+    meta.check_nexa_project(os.args[1], os.args[2], os.args[3]);
 }

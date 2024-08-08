@@ -32,15 +32,21 @@ CustomStructTag :: struct {
     pckg: ^PackageContext,
 }
 
+dump_tag :: #force_inline proc(tag: ^CustomStructTag) {
+    todo();
+}
+
 CustomProcAttributeType :: enum {
+    // file non-modifying
     API_CALL_INTERNAL = 1,
     API_CALL_EXTERNAL,
     DEBUG_ONLY,
     MAIN_THREAD_ONLY,
-    APPLICATION_ENTRY,
+    CORE_INIT,
+    // file modifying
+    APPLICATION_ENTRY = 100,
     LAUNCHER_ENTRY,
     INLINE,
-    CORE_INIT,
 }
 /** @brief used to mark the expression of the procedure containing the attribute applied upon it */
 CustomProcAttributeDeclSpec :: struct {
@@ -60,8 +66,20 @@ CustomProcAttribute :: struct {
     /** @brief stores the file location */
     location: string,
 }
+dump_attribute :: #force_inline proc(attr: ^CustomProcAttribute) {
+    delete_string(attr^.location);
+}
 
-PackageFile :: string;
+/** @brief specifies the type of package (only accounts for the three important "HEADS") */
+PackageType :: enum {
+    DEMO = 0,
+    CORE,
+    EXTERNAL,
+}
+PackageFile :: struct {
+    src: string,
+    location: string,
+}
 /** @brief contains all the custom tags and attributes from the package */
 PackageContext :: struct {
     /** @brief file location of this package */
@@ -82,7 +100,16 @@ init_package :: #force_inline proc(dir: string) -> PackageContext {
 }
 
 dump_package :: proc(using pckg: ^PackageContext) {
-    delete(location);
+    // delete cloned location
+    delete_string(location);
+    // delete cloned files
+    for file in files {
+        if len(file.src) > 0 {
+            delete_string(file.src);
+            delete_string(file.location);
+        }
+    }
+    // discard any subpackages
     for &subpackage in subpackages do dump_package(&subpackage);
     delete(subpackages);
 }
@@ -95,21 +122,24 @@ ProjectContext :: struct {
     attributes: [dynamic]CustomProcAttribute,
 
     /** @brief contains precisely three packages: NexaCore, ExternalUtilities, Demo */
-    packages: [3]PackageContext,
+    packages: [PackageType]PackageContext,
 
     /** @brief points to the precise attribute with the CustomProcAttributeType.APPLICATION_ENTRY */
     app_entry: ^CustomProcAttribute,
     /** @brief pointer to the attribute with the CustomProcAttributeType.LAUNCHER_ENTRY*/
     launcher_entry: ^CustomProcAttribute,
+
+    /** @brief formatter used to save data to be formatted for console (useful since not every attribute requires the same info to be printed) */
+    formatter: IFormatter,
 }
 
 init_project :: #force_inline proc(curr_demo_dir, nexa_core_dir, external_dir: string) -> (project: ProjectContext) {
     project.tags = make([dynamic]CustomStructTag);
     project.attributes = make([dynamic]CustomProcAttribute);
     
-    project.packages[0] = init_package(curr_demo_dir);
-    project.packages[1] = init_package(nexa_core_dir);
-    project.packages[2] = init_package(external_dir);
+    project.packages[.DEMO] = init_package(curr_demo_dir);
+    project.packages[.CORE] = init_package(nexa_core_dir);
+    project.packages[.EXTERNAL] = init_package(external_dir);
 
     project.app_entry = nil;
     project.launcher_entry = nil;
@@ -138,25 +168,27 @@ append_tag :: proc(project: ^ProjectContext) -> ^CustomStructTag {
  * @note this project should be launched implicitly by the NexaCLI and not by the user manually,
  * if no "meta"/precompile is intended to be used, just compile the Demo with odin comp. with ignore-unknown-attributes 
  */
-check_nexa_project :: proc(curr_demo_dir, nexa_core_dir, external_dir: string) {
-    project := init_project(curr_demo_dir, nexa_core_dir, external_dir);
+check_nexa_project :: proc(demo_dir, core_dir, external_dir: string) {
+    project := init_project(demo_dir, core_dir, external_dir);
     context.user_ptr = &project;
     defer dump_project(&project);
-    fmt.printf("Checking folder [NEXA_CORE]: %s\n", nexa_core_dir);
-    check_nexa_core(nexa_core_dir);
+    fmt.printf("Checking folder [NEXA_CORE]: %s\n", core_dir);
+    check_nexa_core(core_dir, &project.packages[.CORE]);
     fmt.printf("Checking folder [EXTERNAL_UTILS]: %s\n", external_dir);
-    check_external_utils(external_dir);
-    fmt.printf("Checking folder [DEMO]: %s\n", curr_demo_dir);
-    check_demo(curr_demo_dir);
+    check_external_utils(external_dir, &project.packages[.EXTERNAL]);
+    fmt.printf("Checking folder [DEMO]: %s\n", demo_dir);
+    check_demo(demo_dir, &project.packages[.DEMO]);
     // some attributes / tags can be only defined once we have parsed everything
     collapse_unresolved();
+    wait();
+    revert_changes();
 }
 
-check_project_dir :: #force_inline proc(dir: string) -> PackageContext {
+check_project_dir :: #force_inline proc(dir: string, pckg: ^PackageContext) {
     info, err := os.lstat(dir);
     assert(err == os.ERROR_NONE);
     // defer os.file_info_delete(info);
-    return check_folder(info);
+    check_folder(info, pckg);
 }
 
 check_nexa_core      :: check_project_dir;
@@ -173,7 +205,7 @@ read_dir :: proc(dir_name: string) -> []os.File_Info {
 	return file_infos;
 }
 
-check_folder :: proc(folder_info: os.File_Info) -> (pckg: PackageContext) {
+check_folder :: proc(folder_info: os.File_Info, pckg: ^PackageContext) {
 
     assert(folder_info.is_dir == true);
 	file_infos := read_dir(folder_info.fullpath);
@@ -186,12 +218,14 @@ check_folder :: proc(folder_info: os.File_Info) -> (pckg: PackageContext) {
     reader: io.Reader;
     file_buffer: []u8;
 
-    pckg = init_package(strings.clone(folder_info.fullpath));
     pckg.files = make([]PackageFile, len(file_infos));
 
     for file_info, index in file_infos {
         pckg.active_file = &pckg.files[index];
-        if file_info.is_dir do append(&pckg.subpackages, check_folder(file_info));
+        if file_info.is_dir {
+            append(&pckg.subpackages, init_package(file_info.fullpath));
+            check_folder(file_info, &pckg.subpackages[len(pckg.subpackages) - 1]);
+        }
         else {
             handle, err = os.open(file_info.fullpath, os.O_RDONLY);
             fmt.assertf(err == os.ERROR_NONE, "Failed to read file(%s)! [Err: %v]\n", file_info.fullpath, err);
@@ -210,22 +244,11 @@ check_folder :: proc(folder_info: os.File_Info) -> (pckg: PackageContext) {
                 fmt.printf("%v\n", p.tok);
                 fmt.assertf(false, "Failed to parse file!(%s)\nErr count: %d\n", file_info.fullpath, p.error_count);
             }
-            check_file(&p, &ast_file, &pckg);
+            check_file(&p, &ast_file, pckg);
             delete(file_buffer);
         }
     }
-
-    return pckg;
 }
-
-format_debug_info_from_decl_spec_struct :: proc(decl_spec: CustomStructTagDeclSpec) -> string {
-    assert(false, "TODO");
-    return "";
-}
-format_debug_info_from_decl_spec_proc :: proc(decl_spec: CustomProcAttributeDeclSpec) -> string {
-    return fmt.tprintf("Attribute: %v;\nProc: %v\n", decl_spec.attribute, decl_spec.proc_decl);
-}
-format_debug_info_from_decl_spec :: proc { format_debug_info_from_decl_spec_proc, format_debug_info_from_decl_spec_struct, }
 
 check_file :: proc(p: ^parser.Parser, ast_file: ^ast.File, pckg: ^PackageContext) {
     _internal_iterate_decls :: proc(p: ^parser.Parser, decls: []^ast.Stmt, ast_file: ^ast.File, pckg: ^PackageContext) {
@@ -333,19 +356,19 @@ check_attributes_proc_non_fielded :: proc(
         * @brief unique attribute; defines a function that should be bound to "core.extern_launch"
         */
         case "NexaAttr_LauncherEntry":
-            package_active_file_changed(pckg, ast_file^.src);
+            package_active_file_changed(pckg, ast_file^.src, ast_file^.fullpath);
             check_attribute_launcher_entry(decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief unique attribute; defines a function that should be bound to "core.extern_main"
         */
         case "NexaAttr_ApplicationEntry":
-            package_active_file_changed(pckg, ast_file^.src);
+            package_active_file_changed(pckg, ast_file^.src, ast_file^.fullpath);
             check_attribute_application_entry(decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief marks function to be "inlined" (same as #force_inline)
         */
         case "NexaAttr_Inline":
-            package_active_file_changed(pckg, ast_file^.src);
+            package_active_file_changed(pckg, ast_file^.src, ast_file^.fullpath);
             check_attribute_inline(decl_spec, pckg, ast_file^.fullpath);
         /**
         * @brief function that has prohibited access (this can be only done on "NexaAttr_APICall" procs) to NexaContext since this proc is/could be called BEFORE context init
@@ -432,7 +455,7 @@ resolve_api_call_internal :: proc(attr: ^CustomProcAttribute) {
 check_proc_usage_folder :: proc(pckg: ^PackageContext, expr: ast.Any_Expr) -> bool {
     for file in pckg^.files {
         fmt.printf("Expression to get proc_name from: %v\n", expr);
-        if check_proc_usage(file, "") do return true;
+        if check_proc_usage(file.src, "") do return true;
     }
     for &subpackage in pckg^.subpackages {
         if check_proc_usage_folder(&subpackage, expr) do return true;
@@ -452,14 +475,7 @@ resolve_app_entry :: proc() {
     project := cast(^ProjectContext)context.user_ptr;
 
     // first ensure that the app entry is located inside the demo package
-    fmt.printf("%s :: %s", project^.packages[0].location, project^.app_entry.pckg^.location);
-    if project^.packages[0].location != project^.app_entry.pckg^.location {
-        fmt.printf("\x1b[31mERR:\x1b[0m App entry is not located inside the same package as the demo!\n");
-        revert_changes();
-    } else {
-        // if it is located, create a main function that will contain the bindings for the app entry function
-        fmt.printf("JEEEEEEEEJJ");
-    }
+    debug_assert_cleanup(project^.packages[.DEMO].location == project^.app_entry.pckg^.location, "App entry is not located inside the same package as the demo!");
 }
 
 resolve_launcher_entry :: proc() {
@@ -469,28 +485,35 @@ resolve_launcher_entry :: proc() {
 revert_changes :: proc() {
     project := cast(^ProjectContext)context.user_ptr;
 
+    fmt.println("Reverting changes now...");
     _revert_change :: proc(pckg: ^PackageContext) {
         handle: os.Handle;
         err: os.Errno;
 
         for file in pckg.files {
-            if len(file) > 0 {
+            if len(file.src) > 0 {
                 // open a file for read/write
-                handle, err = os.open(pckg.location, os.O_WRONLY);
+                handle, err = os.open(file.location, os.O_WRONLY);
                 //TODO: fix on erroring (backup ???)
-                if err != os.ERROR_NONE do fmt.assertf(false, "Dip shit this is...\bFailed to open file! [Err: %v]\n", err);
+                fmt.assertf(err == os.ERROR_NONE, "Dip shit this is...\bFailed to open file! [Err: %v]\n", err);
                 //TODO: fix on erroring (backup ???)
                 write_len: int;
-                write_len, err = os.write_string(handle, file);
-                assert(write_len == len(file) && err == os.ERROR_NONE);
+                write_len, err = os.write_string(handle, file.src);
+                fmt.printf("%v\n", err);
+                fmt.printf("%v\n", write_len);
+                assert(write_len == len(file.src) && err == os.ERROR_NONE);
                 //TODO: fix on erroring (backup ???)
                 assert(os.close(handle) == os.ERROR_NONE);
+                delete_string(file.src);
+                delete_string(file.location);
             }
         }
         for &subpackage in pckg^.subpackages do _revert_change(&subpackage);
+        dump_package(pckg);
     }
 
     for &pckg in project^.packages do _revert_change(&pckg);
+    dump_project(project);
 }
 
 //>>>NOTE: DELETE ON RELEASE
@@ -653,10 +676,10 @@ find_correct_node :: proc(value: ast.Any_Node) {
             fmt.printf("Field: %v", v);
         case ^ast.Field_List:
             fmt.printf("Field list: %v", v);
-        case ^ast.Bit_Field_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Bit_Field_Field:
-            fmt.printf("%v\n", v);
+        // case ^ast.Bit_Field_Type:
+        //     fmt.printf("%v\n", v);
+        // case ^ast.Bit_Field_Field:
+        //     fmt.printf("%v\n", v);
     }
 }
 
@@ -760,7 +783,7 @@ find_correct_expr :: proc(value: ast.Any_Expr) {
             fmt.printf("%v\n", v);
         case ^ast.Matrix_Type:
             fmt.printf("%v\n", v);
-        case ^ast.Bit_Field_Type:
-            fmt.printf("%v\n", v);
+        // case ^ast.Bit_Field_Type:
+        //     fmt.printf("%v\n", v);
     }
 }

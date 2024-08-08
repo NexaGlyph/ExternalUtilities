@@ -7,7 +7,7 @@ import "core:fmt"
  */
 @(private)
 @(NexaAttr_Inline)
-some_proc :: proc() {
+some_proc :: #force_inline proc() {
     fmt.println("Hello from 'some_proc'; My attributes are: private/inline");
 }
 

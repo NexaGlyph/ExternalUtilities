@@ -8,8 +8,8 @@ import "core:strings"
 import "core:odin/ast"
 
 // GENERAL
-package_active_file_changed :: proc(pckg: ^PackageContext, src: string) {
-    pckg^.active_file^ = strings.clone(src);
+package_active_file_changed :: #force_inline proc(pckg: ^PackageContext, src: string, location: string) {
+    pckg^.active_file^ = PackageFile { src = strings.clone(src), location = strings.clone(location) };
 }
 //! GENERAL
 
@@ -21,11 +21,13 @@ check_attribute_api_call :: proc(
     location: string,
 ) {
     api_call_attribute := append_attribute();
-    api_call_attribute^.decl_spec = decl_spec;
-    api_call_attribute^.attr_type = call_type;
-    api_call_attribute^.pckg = pckg;
-    api_call_attribute^.resolved = false; // will be resolved once we find parse all the functions in all packages
-    api_call_attribute^.location = location;
+    api_call_attribute^ = CustomProcAttribute {
+        decl_spec = decl_spec,
+        attr_type = call_type,
+        pckg = pckg,
+        resolved = false, // will be resolved once we find parse all the functions in all packages
+        location = location,
+    };
 }
 //! API CALL
 
@@ -37,15 +39,19 @@ check_attribute_debug_only :: proc(
     location: string,
 ) {
     debug_only_attribute := append_attribute();
-    debug_only_attribute^.decl_spec = decl_spec;
-    debug_only_attribute^.attr_type = .DEBUG_ONLY;
-    debug_only_attribute^.pckg = pckg;
-    debug_only_attribute^.location = location;
+    debug_only_attribute^ = CustomProcAttribute {
+        decl_spec = decl_spec,
+        attr_type = .DEBUG_ONLY,
+        pckg = pckg,
+        location = location,
+    };
 
+    project := cast(^ProjectContext)context.user_ptr;
+    fmt_proc_new(&project^.formatter);
     debug_assert_cleanup(
         inspect_attribute_debug_only(debug_only_attribute, ast_file),
         "Function marked as 'debug only' is not located inside debug when statement!\nFunction: %v\n",
-        format_debug_info_from_decl_spec(decl_spec),
+        project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
     );
 
     debug_only_attribute^.resolved = true;
@@ -128,18 +134,21 @@ check_attribute_launcher_entry :: proc(
     if project^.launcher_entry == nil {
         // set the application entry to the project context
         project^.launcher_entry = append_attribute();
-        project^.launcher_entry^.decl_spec = decl_spec;
-        project^.launcher_entry^.attr_type = .LAUNCHER_ENTRY;
-        project^.launcher_entry^.pckg = pckg;
-        project^.launcher_entry^.resolved = false; // will be resolved once we find the "main" function 
-        project^.launcher_entry^.location = location;
+        project^.launcher_entry^ = CustomProcAttribute {
+            decl_spec = decl_spec,
+            attr_type = .LAUNCHER_ENTRY,
+            pckg = pckg,
+            resolved = false, // will be resolved once we find the "main" function 
+            location = location,
+        };
         // check whether the params and return type fit the description
     } else {
+        fmt_proc_new(&project^.formatter);
         debug_assert_cleanup(
             false,
             "There can be only one procedure with NexaAttr_LauncherEntry defined!\nFound this one: [%v]; while previous defined here: [%v]",
-            format_debug_info_from_decl_spec(project^.launcher_entry^.decl_spec),
-            format_debug_info_from_decl_spec(decl_spec),
+            project^.formatter->Proc_AttributeLocation(project^.launcher_entry^.decl_spec.attribute)->Proc_DeclLocation(project^.launcher_entry^.decl_spec.proc_decl)->Build(),
+            project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
         );
     }
 }
@@ -160,17 +169,20 @@ check_attribute_application_entry :: proc(
     if project^.app_entry == nil {
         // set the application entry to the project context
         project^.app_entry = append_attribute();
-        project^.app_entry^.decl_spec = decl_spec;
-        project^.app_entry^.attr_type = .APPLICATION_ENTRY;
-        project^.app_entry^.pckg = pckg;
-        project^.app_entry^.resolved = false; // will be resolved once we find the "main" function 
-        project^.app_entry^.location = location;
+        project^.app_entry^ = CustomProcAttribute {
+            decl_spec = decl_spec,
+            attr_type = .APPLICATION_ENTRY,
+            pckg = pckg,
+            resolved = false, // will be resolved once we find the "main" function 
+            location = location,
+        };
     } else {
+        fmt_proc_new(&project^.formatter);
         debug_assert_cleanup(
             false,
             "There can be only one procedure with NexaAttr_ApplicationEntry defined!\nFound this one: [%v]; while previous defined here: [%v]",
-            format_debug_info_from_decl_spec(project^.app_entry^.decl_spec),
-            format_debug_info_from_decl_spec(decl_spec),
+            project^.formatter->Proc_AttributeLocation(project^.app_entry^.decl_spec.attribute)->Proc_DeclLocation(project^.app_entry^.decl_spec.proc_decl)->Build(),
+            project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
         );
     }
 }
@@ -183,10 +195,12 @@ check_attribute_inline :: proc(
     location: string,
 ) {
     if decl_spec.proc_decl^.inlining == .Inline {
+        project := cast(^ProjectContext)context.user_ptr;
+        fmt_proc_new(&project^.formatter);
         debug_assert_ignore(
             false,
             "Cannot mark procedure with NexaAttr_Inline that has already been tagged to be inlined\nProc: [%v]",
-            format_debug_info_from_decl_spec(decl_spec),
+            project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
         );
         return; // do not register when it is useless
     }
@@ -211,12 +225,12 @@ modify_proc_inline :: proc(proc_decl: ^ast.Proc_Lit, pckg: ^PackageContext, loca
     end := proc_decl.body.derived_stmt.(^ast.Block_Stmt)^.open.offset;
     begin := proc_decl.pos.offset;
     gb := gap_buffer_init(end - begin);
-    gap_buffer_copy(&gb, pckg^.active_file[begin:end]);
+    gap_buffer_copy(&gb, pckg^.active_file^.src[begin:end]);
     // todo: tprintf instead of this ...
     gap_buffer_insert(&gb, 0, "#force_inline ");
-    io.write_string(writer, pckg^.active_file[:begin]);
+    io.write_string(writer, pckg^.active_file^.src[:begin]);
     io.write_string(writer, gap_buffer_to_string(&gb)); 
-    io.write_string(writer, pckg^.active_file[end:]);
+    io.write_string(writer, pckg^.active_file^.src[end:]);
     gap_buffer_dump(&gb);
 }
 //! INLINE
@@ -228,22 +242,88 @@ check_attribute_core_init :: proc(
     location: string,
 ) {
     core_init_attr := append_attribute();
-    core_init_attr^.decl_spec = decl_spec;
-    core_init_attr^.attr_type = .CORE_INIT;
-    core_init_attr^.pckg = pckg;
-    core_init_attr^.location = location;
+    core_init_attr^ = CustomProcAttribute {
+        decl_spec = decl_spec,
+        attr_type = .CORE_INIT,
+        pckg = pckg,
+        location = location,
+    };
 
-    inspect_attribute_core_init(decl_spec.proc_decl.body.derived_stmt);
+    inspect_attribute_core_init(decl_spec);
 
     core_init_attr^.resolved = true;
 }
 
-inspect_attribute_core_init :: proc(body: ast.Any_Stmt) {
-    block, ok := body.(^ast.Block_Stmt);
-    debug_assert_ignore(ok, "Failed to cast proc body!"); // todo: change to cleanup
-    for stmt in block.stmts {
-        // check for context.user_ptr access
-        fmt.printf("[CORE_INIT] Stmt: %v\n", stmt);
+inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
+    _detect_context_user_ptr_access :: proc(stmt: ^ast.Stmt, decl_spec: CustomProcAttributeDeclSpec) -> bool {
+        #partial switch s in stmt.derived {
+            case ^ast.Expr_Stmt:
+                return _contains_context_user_ptr(s.expr);
+            case ^ast.Block_Stmt:
+                _traverse_stmts(s.stmts, decl_spec);
+            case ^ast.Assign_Stmt:
+                project := cast(^ProjectContext)context.user_ptr;
+                fmt_proc_new(&project^.formatter);
+                for expr in s.lhs {
+                    debug_assert_cleanup(
+                        _contains_context_user_ptr(expr),
+                        "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
+                        project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
+                    );
+                }
+                for expr in s.rhs {
+                    debug_assert_cleanup(
+                        _contains_context_user_ptr(expr),
+                        "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
+                        project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
+                    );
+                }
+        }
+        return false;
     }
+
+    _contains_context_user_ptr :: proc(expr: ^ast.Expr) -> bool {
+        #partial switch e in expr.derived_expr {
+            case ^ast.Selector_Expr:
+                if e.field.name == "user_ptr" && e.expr.derived_expr.(^ast.Ident).name == "context" {
+                    return true;
+                }
+            case ^ast.Call_Expr:
+                contains := false;
+                for i := 0; i < len(e.args) && !contains; i += 1 do contains = _contains_context_user_ptr(expr);
+                return contains;
+            case ^ast.Paren_Expr:
+                return _contains_context_user_ptr(e.expr);
+            case ^ast.Binary_Expr:
+                return _contains_context_user_ptr(e.left) || _contains_context_user_ptr(e.right);
+            case ^ast.Ident:
+                fmt.printf("\x1b[33mIdent name when looking for context.user_ptr: %v\x1b[0m\n", e.name);
+                return e.name == "context.user_ptr";
+        }
+        return false;
+    }
+
+    _traverse_stmts :: #force_inline proc(stmts: []^ast.Stmt, decl_spec: CustomProcAttributeDeclSpec) {
+        project := cast(^ProjectContext)context.user_ptr;
+        fmt_proc_new(&project^.formatter);
+        for stmt in stmts {
+            debug_assert_cleanup(
+                _detect_context_user_ptr_access(stmt, decl_spec), 
+                "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
+                project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
+            );
+        }
+    }
+
+    block, ok := decl_spec.proc_decl.body.derived_stmt.(^ast.Block_Stmt);
+    project := cast(^ProjectContext)context.user_ptr;
+    fmt_proc_new(&project^.formatter);
+    debug_assert_cleanup(
+        ok,
+        "Failed to cast proc body!Decl: %v\n",
+        project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
+    );
+    _traverse_stmts(block.stmts, decl_spec);
 }
+
 //! CORE INIT
