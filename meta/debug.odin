@@ -33,8 +33,10 @@ debug_assert :: proc(notification: AppNotification, condition: bool, formatted_s
             debug_runtime_assert(condition, formatted_string, args);
         case .CleanUp:
             if !condition {
+                fmt.print("\x1b[31m[ABORT_ASSERTION]:\x1b[0m");
+                fmt.println(fmt.tprintf(formatted_string, ..args));
                 revert_changes();
-                debug_abort_assert(false, formatted_string, args);
+                libc.abort();
             }
         case .CanAbort:
             debug_abort_assert(condition, formatted_string, args);
@@ -49,7 +51,8 @@ wait :: #force_inline proc() {
 @(private="file")
 debug_runtime_assert :: #force_inline proc(condition: bool, formatted_string: string, args: ..any) {
     if !condition {
-        fmt.printf("\x1b[31m[RUNTIME_ASSERTION]:\x1b[0m %s", fmt.tprintf(formatted_string, args));
+        fmt.print("\x1b[31m[RUNTIME_ASSERTION]:\x1b[0m");
+        fmt.println(fmt.tprintf(formatted_string, args));
         wait();
     }
 }
@@ -58,7 +61,8 @@ debug_runtime_assert :: #force_inline proc(condition: bool, formatted_string: st
 @(private="file")
 debug_abort_assert :: #force_inline proc(condition: bool, formatted_string: string, args: ..any) {
     if !condition {
-        fmt.printf("\x1b[31m[ABORT_ASSERTION]:\x1b[0m %s", fmt.tprintf(formatted_string, args));
+        fmt.print("\x1b[31m[ABORT_ASSERTION]:\x1b[0m");
+        fmt.println(fmt.tprintf(formatted_string, args));
         libc.abort();
     }
 } 
@@ -131,7 +135,7 @@ fmt_proc_ident :: proc "cdecl" (this: ^Formatter_ProcDataFactory, ident: ^ast.Id
 }
 @(private="file")
 fmt_proc_build :: proc(this: ^Formatter_ProcDataFactory) -> string {
-    return fmt.tprintf(
+    src := fmt.tprintf(
         "Decl spec [found in file: %s; line: %s]\n\tAttribute [found at line: %s]:\n\t\tprototype: %s;\n\t\tfielded: %v;\n\t\ttype: %s;\n\tProc [found at line: %s]:\n\t\tprototype: %s;\n\t\tproc_name: %s\n",
         // base
         unspecified(this^._data.location),
@@ -146,6 +150,8 @@ fmt_proc_build :: proc(this: ^Formatter_ProcDataFactory) -> string {
         unspecified(this^._data.proc_location.location),
         unspecified(this^._data.proc_name),
     );
+    //fmt.println(src);
+    return src;
 }
 @(private="file")
 unspecified_string :: proc(str: string) -> string {

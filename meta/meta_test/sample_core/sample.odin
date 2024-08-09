@@ -16,14 +16,14 @@ MyStruct :: struct {
 }
 
 /**
- * 1. should check for invisibility outside the "NexaCore"
+ * 1. should check whether it is used externally, if yes abort
  */
 @(NexaAttr_APICall)
 api_proc :: proc() {
 }
 
 /**
- * 1. can be ignored...
+ * 1. should check whether it is not used internally, if yes abort
  */
 @(NexaAttr_APICall="external")
 api_proc2 :: proc() {
@@ -45,6 +45,7 @@ debug_proc :: proc() {
  */
 @(NexaAttr_MainThreadOnly)
 main_thread :: proc() {
+    api_proc2();
 }
 
 /**
@@ -53,6 +54,6 @@ main_thread :: proc() {
 @(NexaAttr_CoreInit)
 init :: proc() -> int {
     val :: 5;
-    _ = context.user_ptr; // should assert here
+    //_ = context.user_ptr; // should assert here
     return val;
 }

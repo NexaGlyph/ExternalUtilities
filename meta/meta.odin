@@ -66,6 +66,45 @@ CustomProcAttribute :: struct {
     /** @brief stores the file location */
     location: string,
 }
+/**
+ * @brief procedure to get the name of the function
+ * @note this should be only temporary solution (should fix the deletion of ast.src on 'check_file' exit)
+ */
+get_proc_name :: proc(attr: ^CustomProcAttribute) -> string {
+    project := cast(^ProjectContext)context.user_ptr;
+    // open the file where the original procedure declaration resides in
+    handle, err := os.open(attr^.location, os.O_RDONLY);
+    defer {
+        err = os.close(handle);
+        fmt_proc_new(&project^.formatter);
+        debug_assert_cleanup(err == os.ERROR_NONE, "Failed to close the file; file close err: %v\n", err);
+    }
+    fmt_proc_new(&project^.formatter);
+    debug_assert_cleanup(err == os.ERROR_NONE, "Failed to open the file; file open err: %v\n", err);
+    // allocate (slightly larger) buffer for the name of the procedure
+    body_offset := attr^.decl_spec.proc_decl.body.pos.offset;
+    proc_offset := attr^.decl_spec.proc_decl.pos.offset - attr^.decl_spec.proc_decl.pos.column + 1;
+    file_buffer := make([]byte, body_offset - proc_offset);
+    defer delete(file_buffer);
+    read: int;
+    // read the file at the offset - should be the procedure declaration
+    read, err = os.read_at(handle, file_buffer[:], cast(i64)proc_offset);
+    fmt_proc_new(&project^.formatter);
+    debug_assert_cleanup(err == os.ERROR_NONE && read == body_offset - proc_offset, "Failed to read file!; file read err: %v\n", err);
+    // get the index where the name ends
+    proc_name_end_index := strings.index_any(string(file_buffer), "::") - 1;
+    fmt_proc_new(&project^.formatter);
+    debug_assert_cleanup(
+        proc_name_end_index != -1,
+        "Failed to determine the name of the procedure!\n\tTried at line: %v;\n\tTried with string: %v;\n\tAttribute: %s\n",
+        attr^.decl_spec.proc_decl.pos.line,
+        string(file_buffer),
+        project.formatter->Proc_AttributeLocation(attr^.decl_spec.attribute)->Proc_DeclLocation(attr^.decl_spec.proc_decl)->Build(),
+    );
+    // strip the end of the name (if it contains a space e.g. ' ::')
+    for file_buffer[proc_name_end_index] == ' ' do proc_name_end_index -= 1;
+    return strings.clone_from(file_buffer[:proc_name_end_index + 1]);
+}
 dump_attribute :: #force_inline proc(attr: ^CustomProcAttribute) {
     delete_string(attr^.location);
 }
@@ -99,15 +138,17 @@ init_package :: #force_inline proc(dir: string) -> PackageContext {
     };
 }
 
+dump_string_s :: #force_inline proc(str: string) {
+    if len(str) > 0 do delete_string(str);
+}
+
 dump_package :: proc(using pckg: ^PackageContext) {
     // delete cloned location
-    delete_string(location);
+    dump_string_s(location);
     // delete cloned files
     for file in files {
-        if len(file.src) > 0 {
-            delete_string(file.src);
-            delete_string(file.location);
-        }
+	dump_string_s(file.src);
+	dump_string_s(file.location);
     }
     // discard any subpackages
     for &subpackage in subpackages do dump_package(&subpackage);
@@ -245,7 +286,7 @@ check_folder :: proc(folder_info: os.File_Info, pckg: ^PackageContext) {
                 fmt.assertf(false, "Failed to parse file!(%s)\nErr count: %d\n", file_info.fullpath, p.error_count);
             }
             check_file(&p, &ast_file, pckg);
-            delete(file_buffer);
+            delete(file_buffer); // NOTE: this is wrong, because in some cases we need to be able to access the expressions' tokenizer strings which are only shallow copied from this exact buffer...
         }
     }
 }
@@ -403,10 +444,19 @@ collapse_unresolved :: proc() {
 /** @brief should check all packages "outisde" the defined package (but also checks whether it is used inside, if yes, should warn) */
 resolve_api_call_external :: proc(attr: ^CustomProcAttribute) {
     project := cast(^ProjectContext)context.user_ptr;
+    proc_name: string = get_proc_name(attr);
     for &pckg in project^.packages {
         if attr^.pckg == &pckg { // does not matter that the call is "external", the function does not have to be used at all BUT it cannot be used inside the package
             debug_assert_ignore(
-                !check_proc_usage(&pckg, attr^.decl_spec.proc_decl.derived_expr), 
+                !check_proc_usage(
+                    &pckg,
+                    ProcUsage_Descriptor {
+                        attr^.decl_spec.proc_decl.derived_expr,
+                        attr^.location,
+                        proc_name,
+                    },
+                    false
+                ), 
                 "Failed to resolve api call external for: %v\n", attr,
             );
             attr^.resolved = true;
@@ -415,7 +465,15 @@ resolve_api_call_external :: proc(attr: ^CustomProcAttribute) {
         for &subpackage in pckg.subpackages {
             if attr^.pckg == &subpackage {
                 debug_assert_ignore(
-                    !check_proc_usage(&subpackage, attr^.decl_spec.proc_decl.derived_expr), 
+                    !check_proc_usage(
+                        &subpackage,
+                        ProcUsage_Descriptor {
+                            attr^.decl_spec.proc_decl.derived_expr,
+                            attr^.location,
+                            proc_name,
+                        },
+                        false,
+                    ), 
                     "Failed to resolve api call external for: %v\n", attr,
                 );
                 attr^.resolved = true;
@@ -428,45 +486,112 @@ resolve_api_call_external :: proc(attr: ^CustomProcAttribute) {
 
 resolve_api_call_internal :: proc(attr: ^CustomProcAttribute) {
     project := cast(^ProjectContext)context.user_ptr;
+    proc_name: string = get_proc_name(attr);
     for &pckg in project^.packages {
         if attr^.pckg != &pckg { // does not matter that the call is "external", the function does not have to be used at all BUT it cannot be used inside the package
             debug_assert_ignore(
-                !check_proc_usage(&pckg, attr^.decl_spec.proc_decl.derived_expr), 
+                !check_proc_usage(
+                    &pckg,
+                    ProcUsage_Descriptor {
+                        attr^.decl_spec.proc_decl.derived_expr,
+                        attr^.location,
+                        proc_name,
+                    }, 
+                    true,
+                ), 
                 "Failed to resolve api call external for: %v\n", attr,
             );
-            attr^.resolved = true;
-            return;
         }
         for &subpackage in pckg.subpackages {
             if attr^.pckg != &subpackage {
                 debug_assert_ignore(
-                    !check_proc_usage(&subpackage, attr^.decl_spec.proc_decl.derived_expr), 
+                    !check_proc_usage(
+                        &pckg,
+                        ProcUsage_Descriptor {
+                            attr^.decl_spec.proc_decl.derived_expr,
+                            attr^.location,
+                            proc_name,
+                        }, 
+                        true,
+                    ), 
                     "Failed to resolve api call external for: %v\n", attr,
                 );
-                attr^.resolved = true;
-                return;
             }
         }
     }
-    debug_assert_abort(false, "Unexpected error: attribute was not found among packages or their descendats!");
+    // it is fine utils this point 'cause not asserts were given, call is not located outside its package
 }
 
+/** @brief struct to handle common properties needed for the 'check_proc_usage_folder' proc */
+ProcUsage_Descriptor :: struct {
+    expr: ast.Any_Expr,
+    origin_file: string,
+    proc_name: string,
+}
 /** @brief checks usage of certain procedure in a package */
-check_proc_usage_folder :: proc(pckg: ^PackageContext, expr: ast.Any_Expr) -> bool {
+check_proc_usage_folder :: proc(pckg: ^PackageContext, using desc: ProcUsage_Descriptor, $is_internal: bool) -> bool {
     for file in pckg^.files {
-        fmt.printf("Expression to get proc_name from: %v\n", expr);
-        if check_proc_usage(file.src, "") do return true;
+        fmt.printf("Proc name: %v\n", proc_name);
+        if origin_file == file.location && is_internal do continue;
+        if check_proc_usage(file.src, proc_name) do return true;
     }
     for &subpackage in pckg^.subpackages {
-        if check_proc_usage_folder(&subpackage, expr) do return true;
+        if check_proc_usage_folder(&subpackage, desc, is_internal) do return true;
     }
     return false;
 }
 
-//todo: more optimal way of doing this!!
 /** @brief checks usage of certain procedure in a file */
 check_proc_usage_file :: #force_inline proc(file_src: string, proc_name: string) -> bool {
-    return strings.contains(file_src, proc_name);
+    ast_file := ast.File{
+        src = file_src,
+    };
+
+    p := parser.default_parser();
+    if parser.parse_file(&p, &ast_file) != true {
+        debug_assert_cleanup(false, "Failed to parse file!\nErr count: %d\n", p.error_count);
+    }
+
+    _visit :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor {
+        //fmt.printf("%v :: %v\n", visitor, node);
+        if visitor == nil || node == nil do return nil;
+        call_expr, ok := node^.derived.(^ast.Call_Expr);
+        if ok {
+            // check if the call is that of proc_name
+            selector: ^ast.Selector_Expr;
+            ident: ^ast.Ident;
+            selector, ok = call_expr.expr.derived_expr.(^ast.Selector_Expr);
+            if ok do ident = selector.field;
+            else do ident, _ = call_expr.expr.derived_expr.(^ast.Ident);
+
+            visitor_data := cast(^VisitorData)visitor^.data;
+            fmt.printf(`Comparing idents: "%v" :: "%v"`, ident.name, visitor_data^.proc_name);
+            fmt.println();
+            if ident.name == visitor_data^.proc_name {
+                visitor_data^.found = true;
+                return nil;
+            }
+        }
+        return visitor;
+    }
+    VisitorData :: struct {
+        proc_name: string,
+        found: bool,
+    }
+    visitor_data := VisitorData {
+        proc_name,
+        false,
+    };
+    visitor := ast.Visitor {
+        visit = _visit,
+        data = &visitor_data,
+    };
+    for &decl in ast_file.decls {
+        ast.walk(&visitor, &decl.stmt_base);
+        if visitor_data.found == true do return true;
+    }
+    fmt.println("Returning false from walkin....");
+    return false;
 } 
 
 check_proc_usage :: proc { check_proc_usage_file, check_proc_usage_folder }
@@ -494,6 +619,7 @@ revert_changes :: proc() {
             if len(file.src) > 0 {
                 // open a file for read/write
                 handle, err = os.open(file.location, os.O_WRONLY);
+                os.ftruncate(handle, 0);
                 //TODO: fix on erroring (backup ???)
                 fmt.assertf(err == os.ERROR_NONE, "Dip shit this is...\bFailed to open file! [Err: %v]\n", err);
                 //TODO: fix on erroring (backup ???)
@@ -504,12 +630,8 @@ revert_changes :: proc() {
                 assert(write_len == len(file.src) && err == os.ERROR_NONE);
                 //TODO: fix on erroring (backup ???)
                 assert(os.close(handle) == os.ERROR_NONE);
-                delete_string(file.src);
-                delete_string(file.location);
             }
         }
-        for &subpackage in pckg^.subpackages do _revert_change(&subpackage);
-        dump_package(pckg);
     }
 
     for &pckg in project^.packages do _revert_change(&pckg);

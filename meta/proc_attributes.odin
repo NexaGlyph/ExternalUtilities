@@ -266,14 +266,14 @@ inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
                 fmt_proc_new(&project^.formatter);
                 for expr in s.lhs {
                     debug_assert_cleanup(
-                        _contains_context_user_ptr(expr),
+                        _contains_context_user_ptr(expr) == false,
                         "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
                         project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
                     );
                 }
                 for expr in s.rhs {
                     debug_assert_cleanup(
-                        _contains_context_user_ptr(expr),
+                        _contains_context_user_ptr(expr) == false,
                         "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
                         project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
                     );
@@ -285,7 +285,8 @@ inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
     _contains_context_user_ptr :: proc(expr: ^ast.Expr) -> bool {
         #partial switch e in expr.derived_expr {
             case ^ast.Selector_Expr:
-                if e.field.name == "user_ptr" && e.expr.derived_expr.(^ast.Ident).name == "context" {
+                if (e.field.name == "user_ptr" && 
+                    e.expr.derived_expr.(^ast.Implicit).tok.text == "context") {
                     return true;
                 }
             case ^ast.Call_Expr:
@@ -298,7 +299,7 @@ inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
                 return _contains_context_user_ptr(e.left) || _contains_context_user_ptr(e.right);
             case ^ast.Ident:
                 fmt.printf("\x1b[33mIdent name when looking for context.user_ptr: %v\x1b[0m\n", e.name);
-                return e.name == "context.user_ptr";
+                return strings.contains(e.name, "context");
         }
         return false;
     }
@@ -308,7 +309,7 @@ inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
         fmt_proc_new(&project^.formatter);
         for stmt in stmts {
             debug_assert_cleanup(
-                _detect_context_user_ptr_access(stmt, decl_spec), 
+                _detect_context_user_ptr_access(stmt, decl_spec) == false, 
                 "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
                 project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
             );
