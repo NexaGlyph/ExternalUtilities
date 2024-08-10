@@ -147,8 +147,8 @@ dump_package :: proc(using pckg: ^PackageContext) {
     dump_string_s(location);
     // delete cloned files
     for file in files {
-	dump_string_s(file.src);
-	dump_string_s(file.location);
+        dump_string_s(file.src);
+        dump_string_s(file.location);
     }
     // discard any subpackages
     for &subpackage in subpackages do dump_package(&subpackage);
@@ -263,6 +263,7 @@ check_folder :: proc(folder_info: os.File_Info, pckg: ^PackageContext) {
 
     for file_info, index in file_infos {
         pckg.active_file = &pckg.files[index];
+        pckg.active_file^.location = strings.clone(file_info.fullpath);
         if file_info.is_dir {
             append(&pckg.subpackages, init_package(file_info.fullpath));
             check_folder(file_info, &pckg.subpackages[len(pckg.subpackages) - 1]);
@@ -278,8 +279,8 @@ check_folder :: proc(folder_info: os.File_Info, pckg: ^PackageContext) {
             fmt.assertf(l == len(file_buffer) && e == .None, "Failed to read buffer! Error: %v; Lengths: %d :: %d", e, l, len(file_buffer));
             ast_file = ast.File{
                 src = string(file_buffer),
+                fullpath = pckg.active_file^.location,
             };
-            ast_file.fullpath = strings.clone(file_info.fullpath); // this file_info.full_path is only temporarily allocated...
 
             if parser.parse_file(&p, &ast_file) != true {
                 fmt.printf("%v\n", p.tok);
@@ -531,7 +532,6 @@ ProcUsage_Descriptor :: struct {
 /** @brief checks usage of certain procedure in a package */
 check_proc_usage_folder :: proc(pckg: ^PackageContext, using desc: ProcUsage_Descriptor, $is_internal: bool) -> bool {
     for file in pckg^.files {
-        fmt.printf("Proc name: %v\n", proc_name);
         if origin_file == file.location && is_internal do continue;
         if check_proc_usage(file.src, proc_name) do return true;
     }
@@ -565,7 +565,6 @@ check_proc_usage_file :: #force_inline proc(file_src: string, proc_name: string)
             else do ident, _ = call_expr.expr.derived_expr.(^ast.Ident);
 
             visitor_data := cast(^VisitorData)visitor^.data;
-            fmt.printf(`Comparing idents: "%v" :: "%v"`, ident.name, visitor_data^.proc_name);
             fmt.println();
             if ident.name == visitor_data^.proc_name {
                 visitor_data^.found = true;
@@ -590,7 +589,6 @@ check_proc_usage_file :: #force_inline proc(file_src: string, proc_name: string)
         ast.walk(&visitor, &decl.stmt_base);
         if visitor_data.found == true do return true;
     }
-    fmt.println("Returning false from walkin....");
     return false;
 } 
 
@@ -598,9 +596,183 @@ check_proc_usage :: proc { check_proc_usage_file, check_proc_usage_folder }
 
 resolve_app_entry :: proc() {
     project := cast(^ProjectContext)context.user_ptr;
+    app_entry := project^.app_entry;
 
     // first ensure that the app entry is located inside the demo package
-    debug_assert_cleanup(project^.packages[.DEMO].location == project^.app_entry.pckg^.location, "App entry is not located inside the same package as the demo!");
+    debug_assert_cleanup(project^.packages[.DEMO].location == app_entry.pckg^.location, "App entry is not located inside the same package as the demo!");
+
+    _assert :: #force_inline proc(err: os.Errno) {
+        formatter := &(cast(^ProjectContext)context.user_ptr)^.formatter;
+        app_entry :=  (cast(^ProjectContext)context.user_ptr)^.app_entry;
+        fmt_proc_new(formatter);
+        debug_assert_cleanup(
+            err == os.ERROR_NONE,
+            "Failed to manipulate with file in which attribute: %v\n resides in.\nFile error: %v\n",
+            formatter->Proc_AttributeLocation(app_entry^.decl_spec.attribute)->Build(),
+            err,
+        );
+    }
+    /** @brief since there is a lot of redundant code but at the same time want to remain efficient, if 'main' proc is found in a file, this struct will be populated with the already computed data */
+    ContainsMain_Params :: struct {
+        handle: os.Handle,
+        ast_file: ast.File,
+        main_decl: ^ast.Proc_Lit,
+    }
+    // secondly, ensure that there is a 'main' function in the DEMO package
+    _contains_main_decl :: proc(location: string, using params: ^ContainsMain_Params) -> bool {
+        err: os.Errno;
+        handle, err = os.open(location, os.O_RDWR);
+        _assert(err);
+        size: i64;
+        size, err = os.file_size(handle);
+        _assert(err);
+        file_buffer := make([]byte, size);
+        read_len: int;
+        read_len, err = os.read_full(handle, file_buffer);
+        debug_assert_cleanup(size == cast(i64)read_len, "failed to read the whole file!");
+        _assert(err);
+        ast_file = ast.File {
+            src = string(file_buffer),
+            fullpath = location,
+        };
+        p := parser.default_parser();
+        if parser.parse_file(&p, &ast_file) != true {
+            debug_assert_cleanup(false, "Failed to parse file!\nErr count: %d\n", p.error_count);
+        }
+        // check for main function
+        _visit :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor {
+            if visitor == nil || node == nil do return nil;
+            proc_lit, ok := node^.derived.(^ast.Proc_Lit);
+            if ok {
+                proc_offset := proc_lit^.pos.offset - proc_lit^.pos.column + 1;
+                visitor_data := cast(^VisitorData)visitor^.data;
+                i := proc_offset;
+                for ; visitor_data^.src[i] != ':' && visitor_data^.src[i + 1] != ':'; i += 1 do continue;
+                i -= 1;
+                for visitor_data^.src[i] == ' ' do i -= 1;
+                i += 1;
+                fmt.printf("Checking proc for app entry main: %v\n", string(visitor_data^.src[proc_offset : i]));
+                if string(visitor_data^.src[proc_offset : i]) == "main" {
+                    visitor_data^.found = true;
+                    visitor_data^.decl^ = proc_lit;
+                    return nil;
+                }
+            }
+            return visitor;
+        }
+        VisitorData :: struct {
+            src: string,
+            found: bool,
+            decl: ^^ast.Proc_Lit,
+        }
+        visitor_data := VisitorData {
+            src = string(file_buffer),
+            found = false,
+            decl = &main_decl,
+        };
+        visitor := ast.Visitor {
+            visit = _visit,
+            data = &visitor_data,
+        };
+        for &decl in ast_file.decls {
+            ast.walk(&visitor, &decl.stmt_base);
+            if visitor_data.found == true do return true;
+        }
+        delete(file_buffer);
+        return false;
+    }
+    _check_main :: proc(pckg: ^PackageContext, params: ^ContainsMain_Params) -> bool {
+        for file in pckg^.files {
+            if _contains_main_decl(file.location, params) do return true;
+        }
+        for subpackage in pckg^.subpackages {
+            for file in subpackage.files {
+                if _contains_main_decl(file.location, params) do return true;
+            }
+        }
+        return false;
+    }
+
+    // check whether 'main' procedure and app_entry are located inside the same folder (should be expected but not mandatory...)
+    contains := ContainsMain_Params{};
+    if _contains_main_decl(app_entry^.location, &contains) {
+        defer {
+            delete_string(contains.ast_file.src);
+            os.close(contains.handle);
+        }
+        // dont have to read the file since the main file matches the app entry location
+        writer := os.stream_from_handle(contains.handle);
+        main_block, _ := contains.main_decl^.body.derived.(^ast.Block_Stmt); 
+        main_proc_decl_range: [2]int = {
+            main_block.open.offset,
+            main_block.close.offset,
+        };
+        // note: what if this is not the first attribute ?
+        app_entry_block, _ := app_entry^.decl_spec.proc_decl.body.derived.(^ast.Block_Stmt); 
+        app_entry_decl_range: [2]int = {
+            app_entry_block.pos.offset - app_entry_block.pos.column + 1,
+            app_entry_block.close.offset,
+        };
+        if main_proc_decl_range.x > app_entry_decl_range.x {
+            // truncate file from the app entry
+            os.ftruncate(contains.handle, cast(i64)app_entry_decl_range.x);
+            // skip app entry and write till main
+            io.write_string(
+                writer,
+                contains.ast_file.src[app_entry_decl_range.y : main_proc_decl_range.x],
+            );
+            // todo: ensure that there is no 'alias' for the import of nexa:core
+            // note: also what if he uses fix paths ?
+            // when in main, write the discarded app entry
+            io.write_string(
+                writer,
+                fmt.tprintf("core.extern_main = %s\n",
+                    contains.ast_file.src[app_entry_decl_range.x:app_entry_decl_range.y]),
+            );
+            // write the rest of the file
+            io.write_string(
+                writer,
+                contains.ast_file.src[main_proc_decl_range.x + 1:],
+            );
+        } else {
+            // truncate everything from the main
+            os.ftruncate(contains.handle, cast(i64)main_proc_decl_range.x);
+            // when in main, write the app entry
+            io.write_string(
+                writer,
+                fmt.tprintf("core.extern_main = %s\n",
+                    contains.ast_file.src[app_entry_decl_range.x:app_entry_decl_range.y]),
+            );
+            // write the rest of the main, till the invalid app entry
+            io.write_string(
+                writer,
+                contains.ast_file.src[main_proc_decl_range.x + 1 : app_entry_decl_range.x],
+            );
+            // skip app entry, writing the rest of the file
+            io.write_string(
+                writer,
+                contains.ast_file.src[app_entry_decl_range.x:],
+            );
+        }
+        return;
+    }
+    if _check_main(&project^.packages[.DEMO], &contains) {
+        // grab the code from the function and paste it inside main such that syntax remains valid
+        handle, err := os.open(app_entry^.location, os.O_RDWR);
+        _assert(err);
+        defer {
+            // delete 'contains' data
+            delete_string(contains.ast_file.src);
+            err = os.close(contains.handle);
+            _assert(err);
+            err = os.close(handle);
+            _assert(err);
+        }
+
+        return;
+    }
+
+    debug_assert_cleanup(false, "Failed to locate 'main' function in 'DEMO' directory (%s)\n", project^.packages[.DEMO].location);
 }
 
 resolve_launcher_entry :: proc() {
@@ -636,276 +808,4 @@ revert_changes :: proc() {
 
     for &pckg in project^.packages do _revert_change(&pckg);
     dump_project(project);
-}
-
-//>>>NOTE: DELETE ON RELEASE
-@(private)
-find_correct_node :: proc(value: ast.Any_Node) {
-    switch v in value {
-        case ^ast.Package:
-            fmt.printf("Package: %v", v);
-        case ^ast.File:
-            fmt.printf("File: %v", v);
-        case ^ast.Comment_Group:
-            fmt.printf("Comment group: %v", v);
-        case ^ast.Bad_Expr:
-            fmt.printf("Bad expression: %v", v);
-        case ^ast.Ident:
-            fmt.printf("Ident: %v", v);
-        case ^ast.Implicit:
-            fmt.printf("Implicit: %v", v);
-        case ^ast.Undef:
-            fmt.printf("Undef: %v", v);
-        case ^ast.Basic_Lit:
-            fmt.printf("Basic Lit: %v", v);
-        case ^ast.Basic_Directive:
-            fmt.printf("Basic directive: %v", v);
-        case ^ast.Ellipsis:
-            fmt.printf("Ellipsis: %v", v);
-        case ^ast.Proc_Lit:
-            fmt.printf("Proc_Lit: %v", v);
-        case ^ast.Comp_Lit:
-            fmt.printf("Comp_Lit: %v", v);
-        case ^ast.Tag_Expr:
-            fmt.printf("Tag_Expr: %v", v);
-        case ^ast.Unary_Expr:
-            fmt.printf("Unary_Expr: %v", v);
-        case ^ast.Binary_Expr:
-            fmt.printf("Binary_Expr: %v", v);
-        case ^ast.Paren_Expr:
-            fmt.printf("Paren_Expr: %v", v);
-        case ^ast.Selector_Expr:
-            fmt.printf("Selector_Expr: %v", v);
-        case ^ast.Implicit_Selector_Expr:
-            fmt.printf("Implicit_Selector_Expr: %v", v);
-        case ^ast.Selector_Call_Expr:
-            fmt.printf("Selector_Call_Expr: %v", v);
-        case ^ast.Index_Expr:
-            fmt.printf("Index_Expr: %v", v);
-        case ^ast.Deref_Expr:
-            fmt.printf("Deref_Expr: %v", v);
-        case ^ast.Slice_Expr:
-            fmt.printf("Slice_Expr: %v", v);
-        case ^ast.Matrix_Index_Expr:
-            fmt.printf("Matrix_Index_Expr: %v", v);
-        case ^ast.Call_Expr:
-            fmt.printf("Call_Expr: %v", v);
-        case ^ast.Field_Value:
-            fmt.printf("Field_Value: %v", v);
-        case ^ast.Ternary_If_Expr:
-            fmt.printf("Ternary_If_Expr: %v", v);
-        case ^ast.Ternary_When_Expr:
-            fmt.printf("Ternary_When_Expr: %v", v);
-        case ^ast.Or_Else_Expr:
-            fmt.printf("Or_Else_Expr: %v", v);
-        case ^ast.Or_Return_Expr:
-            fmt.printf("Or_Return_Expr: %v", v);
-        case ^ast.Or_Branch_Expr:
-            fmt.printf("Or_Branch_Expr: %v", v);
-        case ^ast.Type_Assertion:
-            fmt.printf("Type_Assertion: %v", v);
-        case ^ast.Type_Cast:
-            fmt.printf("Type_Cast: %v", v);
-        case ^ast.Auto_Cast:
-            fmt.printf("Auto_Cast: %v", v);
-        case ^ast.Inline_Asm_Expr:
-            fmt.printf("Inline_Asm_Expr: %v", v);
-        case ^ast.Proc_Group:
-            fmt.printf("Proc_Group: %v", v);
-        case ^ast.Typeid_Type:
-            fmt.printf("Typeid_Type: %v", v);
-        case ^ast.Helper_Type:
-            fmt.printf("Helper_Type: %v", v);
-        case ^ast.Distinct_Type:
-            fmt.printf("Distinct_Type: %v", v);
-        case ^ast.Poly_Type:
-            fmt.printf("Poly_Type: %v", v);
-        case ^ast.Proc_Type:
-            fmt.printf("Proc_Type: %v", v);
-        case ^ast.Pointer_Type:
-            fmt.printf("Pointer_Type: %v", v);
-        case ^ast.Multi_Pointer_Type:
-            fmt.printf("Multi_Pointer_Type: %v", v);
-        case ^ast.Array_Type:
-            fmt.printf("Array_Type: %v", v);
-        case ^ast.Dynamic_Array_Type:
-            fmt.printf("Dynamic_Array_Type: %v", v);
-        case ^ast.Struct_Type:
-            fmt.printf("Struct_Type: %v", v);
-        case ^ast.Union_Type:
-            fmt.printf("Union_Type: %v", v);
-        case ^ast.Enum_Type:
-            fmt.printf("Enum_Type: %v", v);
-        case ^ast.Bit_Set_Type:
-            fmt.printf("Bit_Set_Type: %v", v);
-        case ^ast.Map_Type:
-            fmt.printf("Map_Type: %v", v);
-        case ^ast.Relative_Type:
-            fmt.printf("Relative_Type: %v", v);
-        case ^ast.Matrix_Type:
-            fmt.printf("Matrix_Type: %v", v);
-        case ^ast.Bad_Stmt:
-            fmt.printf("Bad_Stmt: %v", v);
-        case ^ast.Empty_Stmt:
-            fmt.printf("Empty_Stmt: %v", v);
-        case ^ast.Expr_Stmt:
-            fmt.printf("Expr_Stmt: %v", v);
-        case ^ast.Tag_Stmt:
-            fmt.printf("Tag_Stmt: %v", v);
-        case ^ast.Assign_Stmt:
-            fmt.printf("Assign_Stmt: %v", v);
-        case ^ast.Block_Stmt:
-            fmt.printf("Block_Stmt: %v", v);
-        case ^ast.If_Stmt:
-            fmt.printf("If_Stmt: %v", v);
-        case ^ast.When_Stmt:
-            fmt.printf("When_Stmt: %v", v);
-        case ^ast.Return_Stmt:
-            fmt.printf("Return_Stmt: %v", v);
-        case ^ast.Defer_Stmt:
-            fmt.printf("Defer_Stmt: %v", v);
-        case ^ast.For_Stmt:
-            fmt.printf("For_Stmt: %v", v);
-        case ^ast.Range_Stmt:
-            fmt.printf("Range_Stmt: %v", v);
-        case ^ast.Inline_Range_Stmt:
-            fmt.printf("Inline_Range_Stmt: %v", v);
-        case ^ast.Case_Clause:
-            fmt.printf("Case_Clause: %v", v);
-        case ^ast.Switch_Stmt:
-            fmt.printf("Switch_Stmt: %v", v);
-        case ^ast.Type_Switch_Stmt:
-            fmt.printf("Type_Switch_Stmt: %v", v);
-        case ^ast.Branch_Stmt:
-            fmt.printf("Branch_Stmt: %v", v);
-        case ^ast.Using_Stmt:
-            fmt.printf("Using_Stmt: %v", v);
-        case ^ast.Bad_Decl:
-            fmt.printf("Bad_Decl: %v", v);
-        case ^ast.Value_Decl:
-            fmt.printf("Value_Decl: %v", v);
-        case ^ast.Package_Decl:
-            fmt.printf("Package Decl: %v", v);
-        case ^ast.Import_Decl:
-            fmt.printf("Import Decl: %v", v);
-        case ^ast.Foreign_Block_Decl:
-            fmt.printf("Foreign block decl: %v", v);
-        case ^ast.Foreign_Import_Decl:
-            fmt.printf("Foreign import decl: %v", v);
-        case ^ast.Attribute:
-            fmt.printf("Attribute: %v", v);
-        case ^ast.Field:
-            fmt.printf("Field: %v", v);
-        case ^ast.Field_List:
-            fmt.printf("Field list: %v", v);
-        // case ^ast.Bit_Field_Type:
-        //     fmt.printf("%v\n", v);
-        // case ^ast.Bit_Field_Field:
-        //     fmt.printf("%v\n", v);
-    }
-}
-
-find_correct_expr :: proc(value: ast.Any_Expr) {
-    switch v in value {
-        case ^ast.Bad_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Ident:
-            fmt.printf("%v\n", v);
-        case ^ast.Implicit:
-            fmt.printf("%v\n", v);
-        case ^ast.Undef:
-            fmt.printf("%v\n", v);
-        case ^ast.Basic_Lit:
-            fmt.printf("%v\n", v);
-        case ^ast.Basic_Directive:
-            fmt.printf("%v\n", v);
-        case ^ast.Ellipsis:
-            fmt.printf("%v\n", v);
-        case ^ast.Proc_Lit:
-            fmt.printf("%v\n", v);
-        case ^ast.Comp_Lit:
-            fmt.printf("%v\n", v);
-        case ^ast.Tag_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Unary_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Binary_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Paren_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Selector_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Implicit_Selector_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Selector_Call_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Index_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Deref_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Slice_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Matrix_Index_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Call_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Field_Value:
-            fmt.printf("%v\n", v);
-        case ^ast.Ternary_If_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Ternary_When_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Or_Else_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Or_Return_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Or_Branch_Expr:
-            fmt.printf("%v\n", v);
-        case ^ast.Type_Assertion:
-            fmt.printf("%v\n", v);
-        case ^ast.Type_Cast:
-            fmt.printf("%v\n", v);
-        case ^ast.Auto_Cast:
-            fmt.printf("%v\n", v);
-        case ^ast.Inline_Asm_Expr:
-            fmt.printf("%v\n", v);
-
-        case ^ast.Proc_Group:
-            fmt.printf("%v\n", v);
-
-        case ^ast.Typeid_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Helper_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Distinct_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Poly_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Proc_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Pointer_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Multi_Pointer_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Array_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Dynamic_Array_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Struct_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Union_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Enum_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Bit_Set_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Map_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Relative_Type:
-            fmt.printf("%v\n", v);
-        case ^ast.Matrix_Type:
-            fmt.printf("%v\n", v);
-        // case ^ast.Bit_Field_Type:
-        //     fmt.printf("%v\n", v);
-    }
 }

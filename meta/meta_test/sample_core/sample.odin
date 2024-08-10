@@ -45,7 +45,6 @@ debug_proc :: proc() {
  */
 @(NexaAttr_MainThreadOnly)
 main_thread :: proc() {
-    api_proc2();
 }
 
 /**

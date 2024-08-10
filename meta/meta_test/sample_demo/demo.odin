@@ -10,3 +10,15 @@ package demo
 @(NexaAttr_ApplicationEntry)
 extern_main :: proc() {
 }
+
+Build_Opts :: struct {
+    //....
+}
+
+nexa_build :: proc(build_opts: ^Build_Opts) {
+    //....
+}
+
+main :: proc() {
+    nexa_build(&Build_Opts{});
+}
