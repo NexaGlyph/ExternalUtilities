@@ -70,7 +70,7 @@ CustomProcAttribute :: struct {
  * @brief procedure to get the name of the function
  * @note this should be only temporary solution (should fix the deletion of ast.src on 'check_file' exit)
  */
-get_proc_name :: proc(attr: ^CustomProcAttribute) -> string {
+get_proc_name_no_handle :: proc(attr: ^CustomProcAttribute) -> string {
     project := cast(^ProjectContext)context.user_ptr;
     // open the file where the original procedure declaration resides in
     handle, err := os.open(attr^.location, os.O_RDONLY);
@@ -105,6 +105,28 @@ get_proc_name :: proc(attr: ^CustomProcAttribute) -> string {
     for file_buffer[proc_name_end_index] == ' ' do proc_name_end_index -= 1;
     return strings.clone_from(file_buffer[:proc_name_end_index + 1]);
 }
+
+/** @brief call this function to get a name of a procedure out of attribute when you already have the source file */
+get_proc_name_src :: #force_inline proc(attr: ^CustomProcAttribute, src: string) -> string {
+    project := cast(^ProjectContext)context.user_ptr;
+    proc_name_line := src[attr^.decl_spec.proc_decl.pos.offset - attr^.decl_spec.proc_decl.pos.column + 1 : attr^.decl_spec.proc_decl.body.pos.offset];
+    // get the index where the name ends
+    proc_name_end_index := strings.index_any(proc_name_line, "::") - 1;
+    fmt_proc_new(&project^.formatter);
+    debug_assert_cleanup(
+        proc_name_end_index != -1,
+        "Failed to determine the name of the procedure!\n\tTried at line: %v;\n\tTried with string: %v;\n\tAttribute: %s\n",
+        attr^.decl_spec.proc_decl.pos.line,
+        proc_name_line,
+        project.formatter->Proc_AttributeLocation(attr^.decl_spec.attribute)->Proc_DeclLocation(attr^.decl_spec.proc_decl)->Build(),
+    );
+    // strip the end of the name (if it contains a space e.g. ' ::')
+    for proc_name_line[proc_name_end_index] == ' ' do proc_name_end_index -= 1;
+    return strings.clone_from(proc_name_line[:proc_name_end_index + 1]);
+}
+
+get_proc_name :: proc { get_proc_name_no_handle, get_proc_name_src }
+
 dump_attribute :: #force_inline proc(attr: ^CustomProcAttribute) {
     delete_string(attr^.location);
 }
@@ -594,21 +616,32 @@ check_proc_usage_file :: #force_inline proc(file_src: string, proc_name: string)
 
 check_proc_usage :: proc { check_proc_usage_file, check_proc_usage_folder }
 
-resolve_app_entry :: proc() {
+resolve_app_entry :: #force_inline proc() {
+    resolve_entry(.APPLICATION_ENTRY);
+}
+resolve_launcher_entry :: #force_inline proc() {
+    resolve_entry(.LAUNCHER_ENTRY);
+}
+resolve_entry :: proc(entry_type: CustomProcAttributeType) {
     project := cast(^ProjectContext)context.user_ptr;
-    app_entry := project^.app_entry;
+    entry: ^CustomProcAttribute;
+    if entry_type == .APPLICATION_ENTRY do entry = project^.app_entry;
+    else if entry_type == .LAUNCHER_ENTRY do entry = project^.launcher_entry;
 
     // first ensure that the app entry is located inside the demo package
-    debug_assert_cleanup(project^.packages[.DEMO].location == app_entry.pckg^.location, "App entry is not located inside the same package as the demo!");
+    debug_assert_cleanup(
+        project^.packages[.DEMO].location == entry.pckg^.location,
+        "Entry[%v] is not located inside the same package as the demo!",
+        entry_type,
+    );
 
-    _assert :: #force_inline proc(err: os.Errno) {
+    _assert :: #force_inline proc(err: os.Errno, entry: ^CustomProcAttribute) {
         formatter := &(cast(^ProjectContext)context.user_ptr)^.formatter;
-        app_entry :=  (cast(^ProjectContext)context.user_ptr)^.app_entry;
         fmt_proc_new(formatter);
         debug_assert_cleanup(
             err == os.ERROR_NONE,
             "Failed to manipulate with file in which attribute: %v\n resides in.\nFile error: %v\n",
-            formatter->Proc_AttributeLocation(app_entry^.decl_spec.attribute)->Build(),
+            formatter->Proc_AttributeLocation(entry^.decl_spec.attribute)->Build(),
             err,
         );
     }
@@ -617,20 +650,21 @@ resolve_app_entry :: proc() {
         handle: os.Handle,
         ast_file: ast.File,
         main_decl: ^ast.Proc_Lit,
+        entry: ^CustomProcAttribute,
     }
     // secondly, ensure that there is a 'main' function in the DEMO package
     _contains_main_decl :: proc(location: string, using params: ^ContainsMain_Params) -> bool {
         err: os.Errno;
         handle, err = os.open(location, os.O_RDWR);
-        _assert(err);
+        _assert(err, entry);
         size: i64;
         size, err = os.file_size(handle);
-        _assert(err);
+        _assert(err, entry);
         file_buffer := make([]byte, size);
         read_len: int;
         read_len, err = os.read_full(handle, file_buffer);
         debug_assert_cleanup(size == cast(i64)read_len, "failed to read the whole file!");
-        _assert(err);
+        _assert(err, entry);
         ast_file = ast.File {
             src = string(file_buffer),
             fullpath = location,
@@ -651,7 +685,7 @@ resolve_app_entry :: proc() {
                 i -= 1;
                 for visitor_data^.src[i] == ' ' do i -= 1;
                 i += 1;
-                fmt.printf("Checking proc for app entry main: %v\n", string(visitor_data^.src[proc_offset : i]));
+                fmt.printf("Checking proc for entry: %v\n", string(visitor_data^.src[proc_offset : i]));
                 if string(visitor_data^.src[proc_offset : i]) == "main" {
                     visitor_data^.found = true;
                     visitor_data^.decl^ = proc_lit;
@@ -695,88 +729,55 @@ resolve_app_entry :: proc() {
 
     // check whether 'main' procedure and app_entry are located inside the same folder (should be expected but not mandatory...)
     contains := ContainsMain_Params{};
-    if _contains_main_decl(app_entry^.location, &contains) {
+    contains.entry = entry;
+    FMT_APPLICATION_ENTRY   :: "core.extern_main = %s;\n";
+    FMT_LAUNCHER_ENTRY      :: "core.extern_launch = %s;\n";
+    _write_anew :: proc(
+        contains: ContainsMain_Params,
+        proc_name: string,
+        entry: ^CustomProcAttribute,
+    ) {
         defer {
             delete_string(contains.ast_file.src);
-            os.close(contains.handle);
+            delete_string(proc_name);
+            err := os.close(contains.handle);
+            _assert(err, entry);
         }
-        // dont have to read the file since the main file matches the app entry location
-        writer := os.stream_from_handle(contains.handle);
         main_block, _ := contains.main_decl^.body.derived.(^ast.Block_Stmt); 
-        main_proc_decl_range: [2]int = {
-            main_block.open.offset,
-            main_block.close.offset,
-        };
-        // note: what if this is not the first attribute ?
-        app_entry_block, _ := app_entry^.decl_spec.proc_decl.body.derived.(^ast.Block_Stmt); 
-        app_entry_decl_range: [2]int = {
-            app_entry_block.pos.offset - app_entry_block.pos.column + 1,
-            app_entry_block.close.offset,
-        };
-        if main_proc_decl_range.x > app_entry_decl_range.x {
-            // truncate file from the app entry
-            os.ftruncate(contains.handle, cast(i64)app_entry_decl_range.x);
-            // skip app entry and write till main
-            io.write_string(
-                writer,
-                contains.ast_file.src[app_entry_decl_range.y : main_proc_decl_range.x],
-            );
-            // todo: ensure that there is no 'alias' for the import of nexa:core
-            // note: also what if he uses fix paths ?
-            // when in main, write the discarded app entry
-            io.write_string(
-                writer,
-                fmt.tprintf("core.extern_main = %s\n",
-                    contains.ast_file.src[app_entry_decl_range.x:app_entry_decl_range.y]),
-            );
-            // write the rest of the file
-            io.write_string(
-                writer,
-                contains.ast_file.src[main_proc_decl_range.x + 1:],
-            );
-        } else {
-            // truncate everything from the main
-            os.ftruncate(contains.handle, cast(i64)main_proc_decl_range.x);
-            // when in main, write the app entry
-            io.write_string(
-                writer,
-                fmt.tprintf("core.extern_main = %s\n",
-                    contains.ast_file.src[app_entry_decl_range.x:app_entry_decl_range.y]),
-            );
-            // write the rest of the main, till the invalid app entry
-            io.write_string(
-                writer,
-                contains.ast_file.src[main_proc_decl_range.x + 1 : app_entry_decl_range.x],
-            );
-            // skip app entry, writing the rest of the file
-            io.write_string(
-                writer,
-                contains.ast_file.src[app_entry_decl_range.x:],
-            );
-        }
+        main_proc_decl_begin := main_block.open.offset;
+        _ = os.ftruncate(contains.handle, 0);
+        _, _ = os.seek(contains.handle, 0, 0);
+        writer := os.stream_from_handle(contains.handle);
+        io.write_string(
+            writer,
+            contains.ast_file.src[:main_proc_decl_begin + 1],
+        );
+        io.write_string(
+            writer,
+            fmt.tprintf(
+                entry^.attr_type == .APPLICATION_ENTRY ? FMT_APPLICATION_ENTRY : FMT_LAUNCHER_ENTRY,
+                proc_name,
+            ),
+        );
+        io.write_string(
+            writer,
+            contains.ast_file.src[main_proc_decl_begin + 1:],
+        )
+    }
+    if _contains_main_decl(entry^.location, &contains) {
+        _write_anew(contains, get_proc_name(entry, contains.ast_file.src), entry);
         return;
     }
     if _check_main(&project^.packages[.DEMO], &contains) {
-        // grab the code from the function and paste it inside main such that syntax remains valid
-        handle, err := os.open(app_entry^.location, os.O_RDWR);
-        _assert(err);
-        defer {
-            // delete 'contains' data
-            delete_string(contains.ast_file.src);
-            err = os.close(contains.handle);
-            _assert(err);
-            err = os.close(handle);
-            _assert(err);
-        }
-
+        _write_anew(contains, get_proc_name(entry), entry);
         return;
     }
 
-    debug_assert_cleanup(false, "Failed to locate 'main' function in 'DEMO' directory (%s)\n", project^.packages[.DEMO].location);
-}
-
-resolve_launcher_entry :: proc() {
-    assert(false, "TODO");
+    debug_assert_cleanup(
+        false,
+        "Failed to locate 'main' function in 'DEMO' directory (%s)\n",
+        project^.packages[.DEMO].location,
+    );
 }
 
 revert_changes :: proc() {
