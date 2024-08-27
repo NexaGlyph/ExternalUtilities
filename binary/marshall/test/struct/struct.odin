@@ -24,7 +24,7 @@ run :: proc() {
         val1: [^]cstring                                "NexaTag_Marshallable",
         val2: [dynamic]i32                              "NexaTag_Marshallable",
         val3: Marshall_Test_Serialize_Struct_Enum       "NexaTag_Marshallable",
-        val4: #type proc() -> bool, // not going to be deserialized
+        val4: #type proc() -> bool, // not going to be serialized
     }
 
     fmt.println("\nBeginning [STRUCT]");
@@ -46,6 +46,7 @@ run :: proc() {
         serialized, err := marshall.serialize(my_struct);
         fmt.assertf(err == .None, "\x1b[33mSerialization\x1b[0m \x1b[31mfailed\x1b[0m with error: \x1b[31m%v\x1b[0m\n", err);
         my_struct_deserialized: Marshall_Test_Serialize_Struct;
+        fmt.printf("Serialized: %v\n", serialized);
         err = marshall.deserialize(my_struct_deserialized, serialized);
         fmt.assertf(err == .None, "\x1b[34mDeserialization\x1b[0m \x1b[31mfailed\x1b[0m with error: \x1b[31m%v\x1b[0m\n", err);
         {

@@ -32,6 +32,12 @@ Marshall_Error :: enum u8 {
     UnknownError                    // unknown error
 }
 
+type_is_struct ::  proc "contextless" (t: ^runtime.Type_Info) -> bool {
+	if t == nil do return false;
+	s, ok := runtime.type_info_base(t).variant.(runtime.Type_Info_Struct);
+	return ok && !s.is_raw_union;
+} 
+
 /**
  * @brief helper functions for data serialization
  */
@@ -272,7 +278,7 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct, recurrent 
         type_info := v.types[index];
         if v.tags[index] == "NexaTag_Marshallable" || recurrent {
             byte_data: []byte = nil;
-            if reflect.is_struct(type_info) {
+            if type_is_struct(type_info) {
                 byte_data = interpret_struct(any {
                         data = cast(rawptr)(uintptr(base_data.data) + offset),
                         id = type_info.id,
@@ -482,6 +488,25 @@ _marshall_serialize_ptr_t :: #force_inline proc "contextless" (t: ^runtime.Type_
     return -1;
 }
 
+@(private)
+_marshall_serialize_struct_t :: proc "contextless" (v: runtime.Type_Info_Struct, recurrent := false) -> int {
+    size := 0;
+    for offset, index in v.offsets {
+        type_info := v.types[index];
+        if v.tags[index] == "NexaTag_Marshallable" || recurrent {
+            _size := -1;
+
+            if type_is_struct(type_info) do _size = _marshall_serialize_struct_t(type_info.variant.(runtime.Type_Info_Struct), true);
+            else do _size = marshall_serialized_size_t(type_info);
+
+            if _size == -1 do return -1;
+
+            size += _size;
+        }
+    }
+    return size;
+}
+
 /**
  * @brief for non-indexable and supported types, one can use this function to determine the size of the binary buffer returned by 'serialize' proc on serialization of the instance of "T" type
  * @note authors aim to discard this function once every supported type (with byte size known at compile time) will have precisely the same serialized length as its "size_of(T)"
@@ -504,6 +529,9 @@ marshall_serialized_size_t :: proc "contextless" (t: ^runtime.Type_Info) -> int 
         case runtime.Type_Info_Enum:
             return t.size;
 
+        case runtime.Type_Info_Struct:
+            return _marshall_serialize_struct_t(v);
+
         case runtime.Type_Info_Pointer:
             return _marshall_serialize_ptr_t(t, v.elem);
         
@@ -519,7 +547,7 @@ marshall_serialized_size_t :: proc "contextless" (t: ^runtime.Type_Info) -> int 
  * @return length of []byte array; -1 if id of data.id is not supported by the 'serialize' function
  */
 marshall_serialized_size :: proc(data: any) -> int {
-    iterable_size :: #force_inline proc(data: any, count: int) -> int {
+    _iterable_size :: #force_inline proc(data: any, count: int) -> int {
         byte_data_len := 0;
         for it := 0; it < count; {
             val, _, fine := reflect.iterate_array(data, &it);
@@ -529,6 +557,32 @@ marshall_serialized_size :: proc(data: any) -> int {
         return 8 + byte_data_len;
     }
 
+    _struct_size :: proc(data: any, v: runtime.Type_Info_Struct, recurrent := false) -> int {
+        size := 0;
+        for offset, index in v.offsets {
+            type_info := v.types[index];
+            if v.tags[index] == "NexaTag_Marshallable" || recurrent {
+                curr_field := any{
+                    data = cast(rawptr)(uintptr(data.data) + offset),
+                    id = type_info.id,
+                };
+                _size := -1;
+                if type_is_struct(type_info) {
+                    _size = _struct_size(
+                        curr_field,
+                        runtime.type_info_base(type_info).variant.(runtime.Type_Info_Struct),
+                        true);
+                } else {
+                    _size = marshall_serialized_size(curr_field);
+                }
+                if _size == -1 do return _size;
+                size += _size;
+            }
+        }
+        return size;
+    }
+
+    // todo: substitute the 'constant' - known size inside the _t version of this function!
     type_info := runtime.type_info_base(type_info_of(data.id));
     #partial switch v in type_info.variant {
         case runtime.Type_Info_Integer:
@@ -593,18 +647,18 @@ marshall_serialized_size :: proc(data: any) -> int {
             return marshall_serialized_size(any{ data.data, v.elem.id }); // multi pointers cannot have (for marshall) size larger than one
 
         case runtime.Type_Info_Array:
-            return iterable_size(data, v.count);
+            return _iterable_size(data, v.count);
 
         case runtime.Type_Info_Dynamic_Array:
             dyn_arr := cast(^runtime.Raw_Dynamic_Array)data.data;
-            return iterable_size(data, dyn_arr.len);
+            return _iterable_size(data, dyn_arr.len);
 
         case runtime.Type_Info_Slice:
             slice := cast(^runtime.Raw_Slice)data.data;
-            return iterable_size(data, slice.len);
+            return _iterable_size(data, slice.len);
 
         case runtime.Type_Info_Struct:
-            assert(false, "todo");
+            return _struct_size(data, v);
 
         case runtime.Type_Info_Enum:
             return marshall_serialized_size({ data.data, v.base.id });
@@ -614,7 +668,7 @@ marshall_serialized_size :: proc(data: any) -> int {
 }
 
 /**
- * @brief helper functions for data serialization
+ * @brief helper functions for data deserialization
  */
 
 /* INTEGER */ 
@@ -1063,7 +1117,7 @@ interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: 
             return _interpret_bytes_to_multi_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
 
         case:
-            elem_size := marshall_serialized_size_t(type_info_of(info.elem.id));
+            elem_size := marshall_deserialized_size(type_info_of(info.elem.id), data[8:]) or_return;
             if elem_size == -1 do return .UnknownError; // this should not happen since here should end up only types which are arbitrary and supported
             for i := 0; i < slice.len; i += 1 {
                 deserialize(
@@ -1116,7 +1170,7 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
 
         // default
         case:
-            elem_size := marshall_serialized_size_t(type_info_of(info.elem.id));
+            elem_size := marshall_deserialized_size(type_info_of(info.elem.id), data[8:]) or_return;
             if elem_size == -1 do return .UnknownError; // this should not happen since here should end up only types which are arbitrary and supported
             for i := 0; i < dyn_arr.len; i += 1 {
                 deserialize(
@@ -1137,53 +1191,25 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
 
 //note: the "data" param should be the pointer to the slice at beginning of the last offset
 @(private)
-_struct_field_size_deduction :: proc "fastcall" (type_info: ^runtime.Type_Info, data: []byte) -> (
+_struct_field_size_deduction :: proc "contextless" (struct_info: runtime.Type_Info_Struct, data: []byte, recurrent := false) -> (
     byte_offset: int, err: Marshall_Error,
 ) {
-    byte_offset = marshall_serialized_size_t(type_info);
-    if byte_offset == -1 { // still could be indexable OR struct
-        #partial switch vv in type_info.variant {
-            // todo: clean redundant logic
-            // indexables
-            case runtime.Type_Info_Array:
-                special_size: i64 = 0; // originally, the special_size should be of "u64" type but it does not matter since the logic of "interpret_bytes_to_int_data" does not watch overflows
-                interpret_bytes_to_int_data(special_size, data[:8]);
-                byte_offset = cast(int)special_size & 0x00000000FFFFFFFF;
-            case runtime.Type_Info_Dynamic_Array:
-                special_size: i64 = 0;
-                interpret_bytes_to_int_data(special_size, data[:8]);
-                byte_offset = cast(int)special_size & 0x00000000FFFFFFFF;
-            case runtime.Type_Info_Enumerated_Array:
-                special_size: i64 = 0;
-                interpret_bytes_to_int_data(special_size, data[:8]);
-                byte_offset = cast(int)special_size & 0x00000000FFFFFFFF;
 
-            // strings
-            case runtime.Type_Info_String:
-                special_size: u32 = 0;
-                interpret_bytes_to_int_data(special_size, data[:4]);
-                byte_offset = cast(int)special_size + 4;
-            
-            // pointers
-            case runtime.Type_Info_Pointer:
-                return _struct_field_size_deduction(vv.elem, data);
-            case runtime.Type_Info_Multi_Pointer:
-                return _struct_field_size_deduction(vv.elem, data);
+    context = runtime.default_context();
 
-            // struct
-            case runtime.Type_Info_Struct:
-                byte_offset = 0;
-                for type, index in vv.types {
-                    bo := marshall_serialized_size_t(type);
-                    if bo != -1 do byte_offset += bo;
-                    else do byte_offset += _struct_field_size_deduction(type, data[byte_offset:]) or_return;
-                }
-
-            // invalid
-            case:
-                return -1, .InvalidType;
+    for type, index in struct_info.types {
+        bo := 0;
+        fmt.printf("Struct/Struct field type: %v\n", type);
+        if type_is_struct(type) do bo = _struct_field_size_deduction(type.variant.(runtime.Type_Info_Struct), data[byte_offset:], struct_info.tags[index] == "NexaTag_Marshallable" || recurrent) or_return;
+        else {
+            fmt.printf("WTF: %v; %v; %v\n", marshall_deserialized_size(type, data[byte_offset:]), recurrent);
+            bo = marshall_deserialized_size(type, data[byte_offset:]) or_return;
         }
+        fmt.printf("Struct field[%v]; size: %v\n", type, bo);
+        if bo == -1 do return -1, .InvalidType;
+        byte_offset += bo;
     }
+
     return byte_offset, .None;
 }
 interpret_bytes_to_struct :: proc(val: any, v: runtime.Type_Info_Struct, data: []byte, recurrent := false) -> (err: Marshall_Error) {
@@ -1194,11 +1220,19 @@ interpret_bytes_to_struct :: proc(val: any, v: runtime.Type_Info_Struct, data: [
     byte_prev_offset: int = 0;
     for offset, index in v.offsets {
         if v.tags[index] == "NexaTag_Marshallable" || recurrent {
-            // determine the byte offset of the 'data' param
-            byte_offset := _struct_field_size_deduction(reflect.type_info_base(v.types[index]), data[byte_prev_offset:]) or_return;
+            byte_offset: int
 
             // if member is also a struct, make recursive iteration
-            if reflect.is_struct(v.types[index]) {
+            if type_is_struct(v.types[index]) {
+                // determine the byte offset of the 'data' param
+                byte_offset = _struct_field_size_deduction(
+                    reflect.type_info_base(v.types[index]).variant.(runtime.Type_Info_Struct),
+                    data[byte_prev_offset:],
+                    v.tags[index] == "NexaTag_Marshallable" || recurrent
+                ) or_return;
+                if byte_offset < 0 do return .InvalidType;
+
+                fmt.printf("Struct field :: [%v/Struct]:\n\tOffset: %v\n\tOffset array: %v\n", v.types[index], byte_offset, data[byte_prev_offset : byte_prev_offset + byte_offset]);
                 interpret_bytes_to_struct(
                     any {
                         data = rawptr(uintptr(val.data) + offset),
@@ -1209,6 +1243,14 @@ interpret_bytes_to_struct :: proc(val: any, v: runtime.Type_Info_Struct, data: [
                     true,
                 ) or_return;
             } else {
+                // determine the byte offset of the 'data' param
+                byte_offset = marshall_deserialized_size(
+                    reflect.type_info_base(v.types[index]),
+                    data[byte_prev_offset:]
+                ) or_return;
+                if byte_offset < 0 do return .InvalidType;
+
+                fmt.printf("Struct field :: [%v]:\n\tOffset: %v\n\tOffset array: %v\n", v.types[index], byte_offset, data[byte_prev_offset : byte_prev_offset + byte_offset]);
                 deserialize(
                     any {
                         data = rawptr(uintptr(val.data) + offset),
@@ -1318,7 +1360,7 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
         case runtime.Type_Info_Parameters:
             return .InvalidType;
 
-        case runtime.Type_Info_Struct: //todo
+        case runtime.Type_Info_Struct:
             return interpret_bytes_to_struct(val, v, data);
 
         case runtime.Type_Info_Union:
@@ -1353,6 +1395,78 @@ deserialize :: proc(val: any, data: []byte) -> Marshall_Error {
     }
     return .UnknownError;
 }
+
+marshall_deserialized_size_t :: marshall_serialized_size_t;
+
+marshall_deserialized_size :: proc "contextless" (t: ^runtime.Type_Info, data: []byte) -> (size: int = -1, err: Marshall_Error = .InvalidType) {
+
+    _string_size :: proc "contextless" (data: []byte) -> (size: int, err: Marshall_Error) {
+        str_size := u32(0);
+        interpret_bytes_to_int_data(str_size, data) or_return;
+        return cast(int)str_size + 4, .None;
+    }
+
+    _iterable_size :: proc "contextless" (data: []byte) -> (size: int, err: Marshall_Error) {
+        special_size := u64(0);
+        interpret_bytes_to_int_data(special_size, data) or_return;
+        return cast(int)(special_size & 0x00000000FFFFFFFF), .None;
+    }
+
+    _struct_size :: proc "contextless" (v: runtime.Type_Info_Struct, data: []byte, recurrent := false) -> (size: int, err: Marshall_Error) {
+        for offset, index in v.offsets {
+            type_info := v.types[index];
+            if v.tags[index] == "NexaTag_Marshallable" || recurrent {
+                _size := -1;
+                if type_is_struct(type_info) {
+                    _size = _struct_size(type_info.variant.(runtime.Type_Info_Struct), data[size:], true) or_return;
+                } else {
+                    _size = marshall_deserialized_size(type_info, data[size:]) or_return;
+                }
+                if _size == -1 do return -1, .InvalidType;
+                size += _size;
+            }
+        }
+        
+        return;
+    }
+
+    _pointer_size :: proc "contextless" (e: ^runtime.Type_Info, data: []byte) -> (size: int, err: Marshall_Error) {
+        #partial switch v in e.variant { // these types are not checked by the *_t function
+            case runtime.Type_Info_String:
+                return _string_size(data[:4]);
+            case runtime.Type_Info_Slice:
+                return _iterable_size(data[:8]);
+            case runtime.Type_Info_Dynamic_Array:
+                return _iterable_size(data[:8]);
+        }
+        return -1, .InvalidType;
+    }
+
+    context = runtime.default_context()
+    fmt.printf("Marshall deseiralized size T[%v]: %v\n", t, marshall_deserialized_size_t(t));
+
+    // should try to grab size out of marshall_deserialized_size_t
+    if size = marshall_deserialized_size_t(t); size != -1 do return size, .None;
+
+    // check the remaining possible types (arrays/strings)
+    #partial switch v in t.variant {
+        case runtime.Type_Info_String:
+            return _string_size(data[:4]);
+        case runtime.Type_Info_Slice:
+            return _iterable_size(data[:8]);
+        case runtime.Type_Info_Dynamic_Array:
+            return _iterable_size(data[:8]);
+        case runtime.Type_Info_Struct:
+            return _struct_size(v, data);
+        case runtime.Type_Info_Pointer:
+            return _pointer_size(v.elem, data);
+        case runtime.Type_Info_Multi_Pointer: 
+            return _pointer_size(v.elem, data);
+    }
+    
+    return;
+}
+
 /**
  * @brief this functions writes binary data of any type "T" such that it creates binary.Writer and its contents using the marshall_write_explicit
  */
@@ -1367,7 +1481,7 @@ marshall_write :: #force_inline proc(data: $T, path: string) -> Marshall_Error {
 marshall_write_explicit :: proc(data: $T, writer: ^binary.Writer) -> (err: Marshall_Error) {
     binary_data := serialize(data) or_return; // automatically assume "hideous" types
     defer delete(binary_data);
-    fmt.printf("%v\n", binary_data);
+    // fmt.printf("%v\n", string(binary_data));
     binary.write_bytes(writer, binary_data);
     return;
 }
@@ -1376,9 +1490,9 @@ marshall_read :: proc($T: typeid, path: string) -> (T, Marshall_Error) {
     reader := binary.init_reader();
     binary.load(&reader, path);
     defer binary.dump_reader(&reader);
-    return marshall_read_explicit(T, reader);
+    return marshall_read_explicit(T, &reader);
 }
-marshall_read_explicit :: proc($T: typeid, reader: binary.Reader) -> (T, Marshall_Error) {
+marshall_read_explicit :: proc($T: typeid, reader: ^binary.Reader) -> (T, Marshall_Error) {
     val: T;
     err := deserialize(val, reader.buffer);
     return val, err;
