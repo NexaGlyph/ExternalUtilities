@@ -77,10 +77,10 @@ get_proc_name_no_handle :: proc(attr: ^CustomProcAttribute) -> string {
     defer {
         err = os.close(handle);
         fmt_proc_new(&project^.formatter);
-        debug_assert_cleanup(err == os.ERROR_NONE, "Failed to close the file; file close err: %v\n", err);
+        massert_cleanup(err == os.ERROR_NONE, "Failed to close the file; file close err: %v\n", err);
     }
     fmt_proc_new(&project^.formatter);
-    debug_assert_cleanup(err == os.ERROR_NONE, "Failed to open the file; file open err: %v\n", err);
+    massert_cleanup(err == os.ERROR_NONE, "Failed to open the file; file open err: %v\n", err);
     // allocate (slightly larger) buffer for the name of the procedure
     body_offset := attr^.decl_spec.proc_decl.body.pos.offset;
     proc_offset := attr^.decl_spec.proc_decl.pos.offset - attr^.decl_spec.proc_decl.pos.column + 1;
@@ -90,11 +90,11 @@ get_proc_name_no_handle :: proc(attr: ^CustomProcAttribute) -> string {
     // read the file at the offset - should be the procedure declaration
     read, err = os.read_at(handle, file_buffer[:], cast(i64)proc_offset);
     fmt_proc_new(&project^.formatter);
-    debug_assert_cleanup(err == os.ERROR_NONE && read == body_offset - proc_offset, "Failed to read file!; file read err: %v\n", err);
+    massert_cleanup(err == os.ERROR_NONE && read == body_offset - proc_offset, "Failed to read file!; file read err: %v\n", err);
     // get the index where the name ends
     proc_name_end_index := strings.index_any(string(file_buffer), "::") - 1;
     fmt_proc_new(&project^.formatter);
-    debug_assert_cleanup(
+    massert_cleanup(
         proc_name_end_index != -1,
         "Failed to determine the name of the procedure!\n\tTried at line: %v;\n\tTried with string: %v;\n\tAttribute: %s\n",
         attr^.decl_spec.proc_decl.pos.line,
@@ -112,14 +112,17 @@ get_proc_name_src :: #force_inline proc(attr: ^CustomProcAttribute, src: string)
     proc_name_line := src[attr^.decl_spec.proc_decl.pos.offset - attr^.decl_spec.proc_decl.pos.column + 1 : attr^.decl_spec.proc_decl.body.pos.offset];
     // get the index where the name ends
     proc_name_end_index := strings.index_any(proc_name_line, "::") - 1;
-    fmt_proc_new(&project^.formatter);
-    debug_assert_cleanup(
-        proc_name_end_index != -1,
-        "Failed to determine the name of the procedure!\n\tTried at line: %v;\n\tTried with string: %v;\n\tAttribute: %s\n",
-        attr^.decl_spec.proc_decl.pos.line,
-        proc_name_line,
-        project.formatter->Proc_AttributeLocation(attr^.decl_spec.attribute)->Proc_DeclLocation(attr^.decl_spec.proc_decl)->Build(),
-    );
+    when ODIN_DEBUG {
+        fmt_proc_new(&project^.formatter);
+        massert_cleanup(
+            proc_name_end_index != -1,
+            "Failed to determine the name of the procedure!\n\tTried at line: %v;\n\tTried with string: %v;\n\tAttribute: %s\n",
+            attr^.decl_spec.proc_decl.pos.line,
+            proc_name_line,
+            project.formatter->Proc_AttributeLocation(attr^.decl_spec.attribute)->Proc_DeclLocation(attr^.decl_spec.proc_decl)->Build(),
+        );
+    } else {
+    }
     // strip the end of the name (if it contains a space e.g. ' ::')
     for proc_name_line[proc_name_end_index] == ' ' do proc_name_end_index -= 1;
     return strings.clone_from(proc_name_line[:proc_name_end_index + 1]);
@@ -138,8 +141,8 @@ PackageType :: enum {
     EXTERNAL,
 }
 PackageFile :: struct {
-    src: string,
-    location: string,
+    src: string "NexaTag_Marshallable",
+    location: string "NexaTag_Marshallable",
 }
 /** @brief contains all the custom tags and attributes from the package */
 PackageContext :: struct {
@@ -165,6 +168,8 @@ dump_string_s :: #force_inline proc(str: string) {
 }
 
 dump_package :: proc(using pckg: ^PackageContext) {
+    fmt.printf("\t[DUMP PACKAGE]\n");
+    defer fmt.printf("\t\x1b[33m[DUMP PACKAGE]: Success\x1b[0m\n");
     // delete cloned location
     dump_string_s(location);
     // delete cloned files
@@ -172,6 +177,7 @@ dump_package :: proc(using pckg: ^PackageContext) {
         dump_string_s(file.src);
         dump_string_s(file.location);
     }
+    delete(files);
     // discard any subpackages
     for &subpackage in subpackages do dump_package(&subpackage);
     delete(subpackages);
@@ -210,9 +216,12 @@ init_project :: #force_inline proc(curr_demo_dir, nexa_core_dir, external_dir: s
 }
 
 dump_project :: #force_inline proc(project: ^ProjectContext) {
+    fmt.printf("[DUMP PROJECT]\n");
+    defer fmt.printf("\x1b[33m[DUMP PROJECT]: Success\x1b[0m\n");
     for &pckg in project^.packages do dump_package(&pckg);
     delete(project^.tags);
     delete(project^.attributes);
+    fmt_proc_dump(&project^.formatter);
 }
 
 append_attribute :: #force_inline proc() -> ^CustomProcAttribute {
@@ -234,7 +243,6 @@ append_tag :: proc(project: ^ProjectContext) -> ^CustomStructTag {
 check_nexa_project :: proc(demo_dir, core_dir, external_dir: string) {
     project := init_project(demo_dir, core_dir, external_dir);
     context.user_ptr = &project;
-    defer dump_project(&project);
     fmt.printf("Checking folder [NEXA_CORE]: %s\n", core_dir);
     check_nexa_core(core_dir, &project.packages[.CORE]);
     fmt.printf("Checking folder [EXTERNAL_UTILS]: %s\n", external_dir);
@@ -243,13 +251,13 @@ check_nexa_project :: proc(demo_dir, core_dir, external_dir: string) {
     check_demo(demo_dir, &project.packages[.DEMO]);
     // some attributes / tags can be only defined once we have parsed everything
     collapse_unresolved();
-    wait();
-    revert_changes();
+    // save the backup
+    save_backup();
 }
 
 check_project_dir :: #force_inline proc(dir: string, pckg: ^PackageContext) {
     info, err := os.lstat(dir);
-    assert(err == os.ERROR_NONE);
+    massert_cleanup(err == os.ERROR_NONE, "Internal meta error: Failed to gather info for project directory; Os error: %v\n", err);
     // defer os.file_info_delete(info);
     check_folder(info, pckg);
 }
@@ -260,17 +268,18 @@ check_demo           :: check_project_dir;
 
 read_dir :: proc(dir_name: string) -> []os.File_Info {
 	handle, err := os.open(dir_name, os.O_RDONLY);
-	fmt.assertf(err == os.ERROR_NONE, "Failed to open directory! Err: %v", err);
+    project := cast(^ProjectContext)context.user_ptr;
+	massert_cleanup(err == os.ERROR_NONE, "Failed to open directory[%s]! Err: %v", dir_name, err);
 	defer os.close(handle);
 	file_infos: []os.File_Info;
 	file_infos, err = os.read_dir(handle, -1);
-	fmt.assertf(err == os.ERROR_NONE, "Failed to read directory! Err: %v", err);
+	massert_cleanup(err == os.ERROR_NONE, "Failed to read directory[%s]! Err: %v", dir_name, err);
 	return file_infos;
 }
 
 check_folder :: proc(folder_info: os.File_Info, pckg: ^PackageContext) {
 
-    assert(folder_info.is_dir == true);
+    massert_cleanup(folder_info.is_dir == true, "Internal meta error: Expected a package/directory; found: %v", folder_info);
 	file_infos := read_dir(folder_info.fullpath);
 	defer os.file_info_slice_delete(file_infos);
 
@@ -292,22 +301,23 @@ check_folder :: proc(folder_info: os.File_Info, pckg: ^PackageContext) {
         }
         else {
             handle, err = os.open(file_info.fullpath, os.O_RDONLY);
-            fmt.assertf(err == os.ERROR_NONE, "Failed to read file(%s)! [Err: %v]\n", file_info.fullpath, err);
+            massert_cleanup(err == os.ERROR_NONE, "Failed to read file[%s]! Err: %v\n", file_info.fullpath, err);
             reader = os.stream_from_handle(handle);
 
             file_buffer = make([]u8, file_info.size);
             l, e := io.read_full(reader, file_buffer[:]);
             os.close(handle);
-            fmt.assertf(l == len(file_buffer) && e == .None, "Failed to read buffer! Error: %v; Lengths: %d :: %d", e, l, len(file_buffer));
+            massert_cleanup(l == len(file_buffer) && e == .None, "Failed to read buffer! Error: %v; Lengths: %d :: %d", e, l, len(file_buffer));
             ast_file = ast.File{
                 src = string(file_buffer),
                 fullpath = pckg.active_file^.location,
             };
 
-            if parser.parse_file(&p, &ast_file) != true {
-                fmt.printf("%v\n", p.tok);
-                fmt.assertf(false, "Failed to parse file!(%s)\nErr count: %d\n", file_info.fullpath, p.error_count);
-            }
+            massert_cleanup(
+                parser.parse_file(&p, &ast_file),
+                "Failed to parse file[%s]! Err count: %d\n",
+                file_info.fullpath, p.error_count,
+            );
             check_file(&p, &ast_file, pckg);
             delete(file_buffer); // NOTE: this is wrong, because in some cases we need to be able to access the expressions' tokenizer strings which are only shallow copied from this exact buffer...
         }
@@ -327,11 +337,11 @@ check_file :: proc(p: ^parser.Parser, ast_file: ^ast.File, pckg: ^PackageContext
                     }
                 case ^ast.When_Stmt:
                     body_block, ok := d.body.derived_stmt.(^ast.Block_Stmt);
-                    debug_assert_abort(ok, "Internal error. This call should always pass...");
+                    massert_abort(ok, "Internal meta error: This call should always pass...");
                     _internal_iterate_decls(p, body_block.stmts, ast_file, pckg);
                     if d.else_stmt != nil {
                         body_block, ok  = d.else_stmt.derived_stmt.(^ast.Block_Stmt);
-                        debug_assert_abort(ok, "Internal error. This call should always pass...");
+                        massert_abort(ok, "Internal meta error: This call should always pass...");
                         _internal_iterate_decls(p, body_block.stmts, ast_file, pckg);
                     }
             }
@@ -369,6 +379,9 @@ check_attributes_proc_fielded :: proc(
     if ast_file.src[field_value.sep.offset] == 61 /* "=" */ {
         lit: ^ast.Basic_Lit;
         lit, _ = field_value.value.derived_expr.(^ast.Basic_Lit);
+
+        formatter := &(cast(^ProjectContext)context.user_ptr)^.formatter;
+        fmt_proc_new(formatter);
         switch ident.name {
             /**
             * @brief this should signify that the call comes from NexaCore, further ident can be specified:
@@ -379,15 +392,18 @@ check_attributes_proc_fielded :: proc(
                 if lit.tok.text == `"internal"` do check_attribute_api_call(.API_CALL_INTERNAL, decl_spec, pckg, ast_file^.fullpath);
                 else if lit.tok.text == `"external"` do check_attribute_api_call(.API_CALL_EXTERNAL, decl_spec, pckg, ast_file^.fullpath);
                 else {
-                    debug_assert_ignore(
+                    massert_ignore(
                         false,
-                        "Invalid type of 'APICall' specifier provided!\nExpected [internal] or [external], but received [%s]",
-                        lit.tok.text
+                        "Invalid type of 'APICall' specifier provided!\nExpected [internal] or [external], but received [%s]!\nDecl: %v\n",
+                        lit.tok.text, formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Proc_Field(field_value)->Build(),
                     );
                 }
             case:
-                // note: maybe should be only warned, not error'd
-                assert(false, "Unknown attribute");
+                massert_ignore(
+                    false,
+                    "Found unknown attribute! Decl: %v\n",
+                    formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Proc_Field(field_value)->Build(),
+                );
         }
     }
 }
@@ -458,7 +474,12 @@ collapse_unresolved :: proc() {
                     resolve_launcher_entry();
 
                 case:
-                    fmt.assertf(false, "This attribute[%v] should have been resolved; Internal error", attr.attr_type);
+                    fmt_proc_new(&project^.formatter);
+                    massert_cleanup(
+                        false,
+                        "Internal meta error: The attribute[%v] should have been resolved\nDecl: %v\n",
+                        attr.attr_type, project^.formatter->Proc_AttributeLocation(attr.decl_spec.attribute)->Proc_DeclLocation(attr.decl_spec.proc_decl)->Build(),
+                    );
             }
         }
     }
@@ -468,9 +489,10 @@ collapse_unresolved :: proc() {
 resolve_api_call_external :: proc(attr: ^CustomProcAttribute) {
     project := cast(^ProjectContext)context.user_ptr;
     proc_name: string = get_proc_name(attr);
+    defer delete_string(proc_name);
     for &pckg in project^.packages {
         if attr^.pckg == &pckg { // does not matter that the call is "external", the function does not have to be used at all BUT it cannot be used inside the package
-            debug_assert_ignore(
+            massert_ignore(
                 !check_proc_usage(
                     &pckg,
                     ProcUsage_Descriptor {
@@ -487,7 +509,7 @@ resolve_api_call_external :: proc(attr: ^CustomProcAttribute) {
         }
         for &subpackage in pckg.subpackages {
             if attr^.pckg == &subpackage {
-                debug_assert_ignore(
+                massert_ignore(
                     !check_proc_usage(
                         &subpackage,
                         ProcUsage_Descriptor {
@@ -504,15 +526,16 @@ resolve_api_call_external :: proc(attr: ^CustomProcAttribute) {
             }
         }
     }
-    debug_assert_abort(false, "Unexpected error: attribute was not found among packages or their descendats!");
+    massert_abort(false, "Unexpected error: attribute was not found among packages or their descendats!");
 }
 
 resolve_api_call_internal :: proc(attr: ^CustomProcAttribute) {
     project := cast(^ProjectContext)context.user_ptr;
     proc_name: string = get_proc_name(attr);
+    defer delete_string(proc_name);
     for &pckg in project^.packages {
         if attr^.pckg != &pckg { // does not matter that the call is "external", the function does not have to be used at all BUT it cannot be used inside the package
-            debug_assert_ignore(
+            massert_ignore(
                 !check_proc_usage(
                     &pckg,
                     ProcUsage_Descriptor {
@@ -527,7 +550,7 @@ resolve_api_call_internal :: proc(attr: ^CustomProcAttribute) {
         }
         for &subpackage in pckg.subpackages {
             if attr^.pckg != &subpackage {
-                debug_assert_ignore(
+                massert_ignore(
                     !check_proc_usage(
                         &pckg,
                         ProcUsage_Descriptor {
@@ -571,7 +594,7 @@ check_proc_usage_file :: #force_inline proc(file_src: string, proc_name: string)
 
     p := parser.default_parser();
     if parser.parse_file(&p, &ast_file) != true {
-        debug_assert_cleanup(false, "Failed to parse file!\nErr count: %d\n", p.error_count);
+        massert_cleanup(false, "Failed to parse file!\nErr count: %d\n", p.error_count);
     }
 
     _visit :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor {
@@ -629,7 +652,7 @@ resolve_entry :: proc(entry_type: CustomProcAttributeType) {
     else if entry_type == .LAUNCHER_ENTRY do entry = project^.launcher_entry;
 
     // first ensure that the app entry is located inside the demo package
-    debug_assert_cleanup(
+    massert_cleanup(
         project^.packages[.DEMO].location == entry.pckg^.location,
         "Entry[%v] is not located inside the same package as the demo!",
         entry_type,
@@ -638,7 +661,7 @@ resolve_entry :: proc(entry_type: CustomProcAttributeType) {
     _assert :: #force_inline proc(err: os.Errno, entry: ^CustomProcAttribute) {
         formatter := &(cast(^ProjectContext)context.user_ptr)^.formatter;
         fmt_proc_new(formatter);
-        debug_assert_cleanup(
+        massert_cleanup(
             err == os.ERROR_NONE,
             "Failed to manipulate with file in which attribute: %v\n resides in.\nFile error: %v\n",
             formatter->Proc_AttributeLocation(entry^.decl_spec.attribute)->Build(),
@@ -663,16 +686,17 @@ resolve_entry :: proc(entry_type: CustomProcAttributeType) {
         file_buffer := make([]byte, size);
         read_len: int;
         read_len, err = os.read_full(handle, file_buffer);
-        debug_assert_cleanup(size == cast(i64)read_len, "failed to read the whole file!");
+        massert_cleanup(size == cast(i64)read_len, "failed to read the whole file!");
         _assert(err, entry);
         ast_file = ast.File {
             src = string(file_buffer),
             fullpath = location,
         };
         p := parser.default_parser();
-        if parser.parse_file(&p, &ast_file) != true {
-            debug_assert_cleanup(false, "Failed to parse file!\nErr count: %d\n", p.error_count);
-        }
+        massert_cleanup(
+            parser.parse_file(&p, &ast_file),
+            "Failed to parse file!\nErr count: %d\n", p.error_count
+        );
         // check for main function
         _visit :: proc(visitor: ^ast.Visitor, node: ^ast.Node) -> ^ast.Visitor {
             if visitor == nil || node == nil do return nil;
@@ -685,7 +709,7 @@ resolve_entry :: proc(entry_type: CustomProcAttributeType) {
                 i -= 1;
                 for visitor_data^.src[i] == ' ' do i -= 1;
                 i += 1;
-                fmt.printf("Checking proc for entry: %v\n", string(visitor_data^.src[proc_offset : i]));
+                when ODIN_DEBUG do fmt.printf("Checking proc for entry: %v\n", string(visitor_data^.src[proc_offset : i]));
                 if string(visitor_data^.src[proc_offset : i]) == "main" {
                     visitor_data^.found = true;
                     visitor_data^.decl^ = proc_lit;
@@ -773,40 +797,114 @@ resolve_entry :: proc(entry_type: CustomProcAttributeType) {
         return;
     }
 
-    debug_assert_cleanup(
+    massert_cleanup(
         false,
         "Failed to locate 'main' function in 'DEMO' directory (%s)\n",
         project^.packages[.DEMO].location,
     );
 }
 
-revert_changes :: proc() {
+revert_changes_in_program :: proc() {
     project := cast(^ProjectContext)context.user_ptr;
 
     fmt.println("Reverting changes now...");
     _revert_change :: proc(pckg: ^PackageContext) {
-        handle: os.Handle;
-        err: os.Errno;
-
         for file in pckg.files {
-            if len(file.src) > 0 {
-                // open a file for read/write
-                handle, err = os.open(file.location, os.O_WRONLY);
-                os.ftruncate(handle, 0);
-                //TODO: fix on erroring (backup ???)
-                fmt.assertf(err == os.ERROR_NONE, "Dip shit this is...\bFailed to open file! [Err: %v]\n", err);
-                //TODO: fix on erroring (backup ???)
-                write_len: int;
-                write_len, err = os.write_string(handle, file.src);
-                fmt.printf("%v\n", err);
-                fmt.printf("%v\n", write_len);
-                assert(write_len == len(file.src) && err == os.ERROR_NONE);
-                //TODO: fix on erroring (backup ???)
-                assert(os.close(handle) == os.ERROR_NONE);
-            }
+            if len(file.src) > 0 do revert_changes_file(file);
         }
     }
 
     for &pckg in project^.packages do _revert_change(&pckg);
+    dump_project(project);
+}
+
+revert_changes_file :: proc(file: PackageFile) {
+    handle: os.Handle;
+    err: os.Errno;
+
+    // open a file for read/write
+    handle, err = os.open(file.location, os.O_WRONLY);
+    massert_cleanup(err == os.ERROR_NONE, "Internal meta error: Failed to open file[%s]; Os error: %d\n", file.location, err);
+    os.ftruncate(handle, 0);
+    write_len: int;
+    write_len, err = os.write_string(handle, file.src);
+    massert_cleanup(
+        write_len == len(file.src) && err == os.ERROR_NONE, 
+        "Internal meta error: Failed to write the file buffer of expected size! Os error: %d; Lengths: %v[Expected] :: %v[Written]\n",
+        err, len(file.src), write_len,
+    );
+    err = os.close(handle);
+    massert_cleanup(
+        err == os.ERROR_NONE,
+        "Internal meta error: Failed to close file; Os error: %d\n",
+        err,
+    );
+}
+
+/*
+* ================================
+*          ProjectBackup
+* ================================
+*/
+
+import marshall "nexa_external:binary/marshall"
+
+Backup :: []PackageFile;
+BACKUP_FILENAME :: "project-backup.txt";
+
+revert_changes :: proc(backup: Backup) {
+    for file in backup {
+        revert_changes_file(file);
+    }
+}
+
+/**
+ * @brief loads the backup (in this sense loads & writes into the project again)
+ */
+load_backup :: proc() {
+    backup, err := marshall.marshall_read(Backup, BACKUP_FILENAME);
+    for b in backup do fmt.printf("BACKUP [%s]:\n%s\n", b.location, b.src);
+    massert_abort(err == .None, "Failed to load backup! Marshall err: %v", err);
+    revert_changes(backup);
+}
+
+/**
+ * @brief saves the files that were overwritten by meta into a single file
+ */
+save_backup :: proc() {
+    project := cast(^ProjectContext)context.user_ptr;
+
+    fmt.println("Saving backup...");
+    _register_file :: #force_inline proc(pckg: ^PackageContext, files_to_backup: ^[dynamic]PackageFile) {
+        for file in pckg^.files {
+            if len(file.src) > 0 do append(files_to_backup, PackageFile {
+                location = strings.clone(file.location),
+                src = strings.clone(file.src),
+            });
+        }
+    }
+
+    files_to_backup := make([dynamic]PackageFile);
+    defer {
+        // fmt.printf("\x1b[32mBEFORE WRITE\x1b[0m\n");
+        // for b in files_to_backup do fmt.printf("BACKUP [%s]:\n%s\n", b.location, b.src);
+
+        err := marshall.marshall_write(files_to_backup[:], BACKUP_FILENAME);
+
+        // fmt.printf("\x1b[32mAFTER WRITE\x1b[0m\n");
+        // for b in files_to_backup do fmt.printf("BACKUP [%s]:\n%s\n", b.location, b.src);
+
+        for f in files_to_backup {
+            delete_string(f.location);
+            delete_string(f.src);
+        }
+        delete(files_to_backup);
+        if err != .None {
+            revert_changes_in_program();
+            massert_abort(false, "Failed to save the original files into backup!\nReverting changes now...");
+        }
+    }
+
+    for &pckg in project^.packages do _register_file(&pckg, &files_to_backup);
     dump_project(project);
 }

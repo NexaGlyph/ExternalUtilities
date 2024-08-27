@@ -48,7 +48,7 @@ check_attribute_debug_only :: proc(
 
     project := cast(^ProjectContext)context.user_ptr;
     fmt_proc_new(&project^.formatter);
-    debug_assert_cleanup(
+    massert_cleanup(
         inspect_attribute_debug_only(debug_only_attribute, ast_file),
         "Function marked as 'debug only' is not located inside debug when statement!\nFunction: %v\n",
         project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
@@ -65,18 +65,18 @@ inspect_attribute_debug_only :: proc(debug_only_attribute: ^CustomProcAttribute,
         #partial switch e in expr {
             case ^ast.Paren_Expr:
                 ident, ok = e.expr.derived_expr.(^ast.Ident);
-                debug_assert_abort(false, "Complex expression parsing and boolean eval is not yet supported for NexaAttr_DebugOnly; Please just use 'when NexaConst_Debug'");
+                massert_abort(false, "Complex expression parsing and boolean eval is not yet supported for NexaAttr_DebugOnly; Please just use 'when NexaConst_Debug'");
             case ^ast.Binary_Expr:
                 ident, ok = e.left.derived_expr.(^ast.Ident); //note: what about Yoda notation ?????
-                debug_assert_abort(false, "Complex expression parsing and boolean eval is not yet supported for NexaAttr_DebugOnly; Please just use 'when NexaConst_Debug'");
+                massert_abort(false, "Complex expression parsing and boolean eval is not yet supported for NexaAttr_DebugOnly; Please just use 'when NexaConst_Debug'");
             case ^ast.Unary_Expr:
                 ident, ok = e.expr.derived_expr.(^ast.Ident);
                 if e.op.kind == .Not do reversed = true;
-                debug_assert_cleanup(ok, "Failed to parse 'when' condition! It seems that the logic is too obscure to evaluate the primitve check for 'NexaConst_Debug'");
+                massert_cleanup(ok, "Failed to parse 'when' condition! It seems that the logic is too obscure to evaluate the primitve check for 'NexaConst_Debug'");
             case ^ast.Ident:
                 ident = e;
             case:
-                debug_assert_cleanup(false, "Invalid expression when parsing when block! %v\n", e);
+                massert_cleanup(false, "Invalid expression when parsing when block! %v\n", e);
         }
         return;
     }
@@ -119,7 +119,7 @@ check_attribute_main_thread :: proc(
     pckg: ^PackageContext,
     location: string,
 ) {
-    not_yet_implemented();
+    todo();
 }
 //! MAIN THREAD ONLY
 
@@ -144,7 +144,7 @@ check_attribute_launcher_entry :: proc(
         // check whether the params and return type fit the description
     } else {
         fmt_proc_new(&project^.formatter);
-        debug_assert_cleanup(
+        massert_cleanup(
             false,
             "There can be only one procedure with NexaAttr_LauncherEntry defined!\nFound this one: [%v]; while previous defined here: [%v]",
             project^.formatter->Proc_AttributeLocation(project^.launcher_entry^.decl_spec.attribute)->Proc_DeclLocation(project^.launcher_entry^.decl_spec.proc_decl)->Build(),
@@ -178,7 +178,7 @@ check_attribute_application_entry :: proc(
         };
     } else {
         fmt_proc_new(&project^.formatter);
-        debug_assert_cleanup(
+        massert_cleanup(
             false,
             "There can be only one procedure with NexaAttr_ApplicationEntry defined!\nFound this one: [%v]; while previous defined here: [%v]",
             project^.formatter->Proc_AttributeLocation(project^.app_entry^.decl_spec.attribute)->Proc_DeclLocation(project^.app_entry^.decl_spec.proc_decl)->Build(),
@@ -197,7 +197,7 @@ check_attribute_inline :: proc(
     if decl_spec.proc_decl^.inlining == .Inline {
         project := cast(^ProjectContext)context.user_ptr;
         fmt_proc_new(&project^.formatter);
-        debug_assert_ignore(
+        massert_ignore(
             false,
             "Cannot mark procedure with NexaAttr_Inline that has already been tagged to be inlined\nProc: [%v]",
             project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
@@ -218,7 +218,7 @@ check_attribute_inline :: proc(
 modify_proc_inline :: proc(proc_decl: ^ast.Proc_Lit, pckg: ^PackageContext, location: string) {
     // access writer for the specific file 
     handle, ok := os.open(location, os.O_WRONLY);
-    debug_assert_cleanup(ok == os.ERROR_NONE, "Failed to open file %s\nFile open error: %v\n", location, ok);
+    massert_cleanup(ok == os.ERROR_NONE, "Failed to open file %s\nFile open error: %v\n", location, ok);
     defer os.close(handle);
     writer := os.stream_from_handle(handle);
     // we have to always reset the buffer for the writer with the one that has the 'original' file, a.k.a authors code
@@ -263,16 +263,17 @@ inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
                 _traverse_stmts(s.stmts, decl_spec);
             case ^ast.Assign_Stmt:
                 project := cast(^ProjectContext)context.user_ptr;
+
                 fmt_proc_new(&project^.formatter);
                 for expr in s.lhs {
-                    debug_assert_cleanup(
+                    massert_cleanup(
                         _contains_context_user_ptr(expr) == false,
                         "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
                         project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
                     );
                 }
                 for expr in s.rhs {
-                    debug_assert_cleanup(
+                    massert_cleanup(
                         _contains_context_user_ptr(expr) == false,
                         "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
                         project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
@@ -308,7 +309,7 @@ inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
         project := cast(^ProjectContext)context.user_ptr;
         fmt_proc_new(&project^.formatter);
         for stmt in stmts {
-            debug_assert_cleanup(
+            massert_cleanup(
                 _detect_context_user_ptr_access(stmt, decl_spec) == false, 
                 "Procedure marked as 'CoreInit' is using context.user_ptr which is prohibited!\nDecl: %v",
                 project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
@@ -319,7 +320,7 @@ inspect_attribute_core_init :: proc(decl_spec: CustomProcAttributeDeclSpec) {
     block, ok := decl_spec.proc_decl.body.derived_stmt.(^ast.Block_Stmt);
     project := cast(^ProjectContext)context.user_ptr;
     fmt_proc_new(&project^.formatter);
-    debug_assert_cleanup(
+    massert_cleanup(
         ok,
         "Failed to cast proc body!Decl: %v\n",
         project^.formatter->Proc_AttributeLocation(decl_spec.attribute)->Proc_DeclLocation(decl_spec.proc_decl)->Build(),
