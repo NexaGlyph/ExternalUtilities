@@ -7,7 +7,6 @@ import "base:intrinsics"
 import "core:fmt"
 import "core:mem"
 import "core:math"
-// import "core:unicode/utf8"
 import "core:reflect"
 import "core:strings"
 
@@ -190,6 +189,7 @@ interpret_string :: proc(str: string) -> ([]byte, Marshall_Error) {
         copy_slice(byte_data[:4], bytes);
         delete(bytes);
     }
+    // fmt.printf("\x1b[33mCopying\x1b[0m... %s\n", str);
     copy_from_string(byte_data[4:], str);
     return byte_data, .None;
 }
@@ -270,7 +270,6 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct, recurrent 
 
     StructTempData :: []byte;
 
-    //todo: not every offset for every type is accurate! (indexable types)
     byte_data_temp := make([dynamic]StructTempData);
     defer delete(byte_data_temp);
     byte_data_size_final := u32(0);
@@ -297,8 +296,9 @@ interpret_struct :: proc(base_data: any, v: runtime.Type_Info_Struct, recurrent 
         }
     }
 
-    byte_data = make([]byte, byte_data_size_final);
-    prev_pos := 0;
+    byte_data = make([]byte, byte_data_size_final + size_of(u32));
+    interpret_int_data(byte_data_size_final, byte_data[:size_of(u32)]);
+    prev_pos := size_of(u32);
     for struct_data in byte_data_temp {
         copy_slice(byte_data[prev_pos : prev_pos + len(struct_data)], struct_data);
         prev_pos += len(struct_data);
@@ -558,7 +558,7 @@ marshall_serialized_size :: proc(data: any) -> int {
     }
 
     _struct_size :: proc(data: any, v: runtime.Type_Info_Struct, recurrent := false) -> int {
-        size := 0;
+        size := size_of(u32);
         for offset, index in v.offsets {
             type_info := v.types[index];
             if v.tags[index] == "NexaTag_Marshallable" || recurrent {
@@ -956,10 +956,11 @@ interpret_bytes_to_string :: proc(data: []byte) -> (string, Marshall_Error) {
     special_size: u32 = 0;
     interpret_bytes_to_int_data(special_size, data[:4]);
     if u32(len(data)) - 4 != special_size do return "", .StringBufferSizeMismatch;
-    return string(data[4:]), .None;
+    return strings.clone_from_bytes(data[4:]), .None;
 }
 interpret_bytes_to_cstring :: proc(data: []byte) -> (cstring, Marshall_Error) {
     string_data, err := interpret_bytes_to_string(data);
+    defer delete_string(string_data);
     if err != .None do return "", err;
     return strings.clone_to_cstring(string_data), err;
 }
@@ -1102,7 +1103,7 @@ interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: 
 
     if slice.len == 0 do return .None;
 
-    #partial switch v in info.elem.variant {
+    #partial switch v in runtime.type_info_base(info.elem).variant {
         // requires special iteration
         case runtime.Type_Info_String:
             return _interpret_bytes_to_strings(slice.data, slice.len, info.elem_size, info.elem.id, data);
@@ -1115,6 +1116,26 @@ interpret_bytes_to_slice :: proc(val: any, info: runtime.Type_Info_Slice, data: 
 
         case runtime.Type_Info_Dynamic_Array:
             return _interpret_bytes_to_multi_indexable(slice.data, size_of(runtime.Raw_Slice), slice.len, info.elem.id, data[8:]);
+        
+        case runtime.Type_Info_Struct: // not every struct has the same size.. (especially if it contains indexables/strings)
+            prev_size := 8;
+            for i := 0; i < slice.len; i += 1 {
+                elem_size := u32(0);
+                interpret_bytes_to_int_data(
+                    elem_size,
+                    data[prev_size : prev_size + size_of(u32)],
+                ) or_return;
+                elem_size += size_of(u32);
+                deserialize(
+                    any {
+                        data = rawptr(uintptr(slice.data) + uintptr(i * info.elem_size)), // note: this offset is for the dynamic array, so it has to be precisely of the size_of(T), not the byte array offset!
+                        id = info.elem.id,
+                    },
+                    data[prev_size : prev_size + cast(int)elem_size],
+                ) or_return;
+                prev_size += cast(int)elem_size;
+            }
+            return;
 
         case:
             elem_size := marshall_deserialized_size(type_info_of(info.elem.id), data[8:]) or_return;
@@ -1191,33 +1212,20 @@ interpret_bytes_to_dyn_array :: proc(val: any, info: runtime.Type_Info_Dynamic_A
 
 //note: the "data" param should be the pointer to the slice at beginning of the last offset
 @(private)
-_struct_field_size_deduction :: proc "contextless" (struct_info: runtime.Type_Info_Struct, data: []byte, recurrent := false) -> (
+_struct_field_size_deduction :: proc "contextless" (struct_info: runtime.Type_Info_Struct, data: []byte) -> (
     byte_offset: int, err: Marshall_Error,
 ) {
-
-    context = runtime.default_context();
-
-    for type, index in struct_info.types {
-        bo := 0;
-        fmt.printf("Struct/Struct field type: %v\n", type);
-        if type_is_struct(type) do bo = _struct_field_size_deduction(type.variant.(runtime.Type_Info_Struct), data[byte_offset:], struct_info.tags[index] == "NexaTag_Marshallable" || recurrent) or_return;
-        else {
-            fmt.printf("WTF: %v; %v; %v\n", marshall_deserialized_size(type, data[byte_offset:]), recurrent);
-            bo = marshall_deserialized_size(type, data[byte_offset:]) or_return;
-        }
-        fmt.printf("Struct field[%v]; size: %v\n", type, bo);
-        if bo == -1 do return -1, .InvalidType;
-        byte_offset += bo;
-    }
-
-    return byte_offset, .None;
+    bo := u32(0);
+    interpret_bytes_to_int_data(bo, data) or_return;
+    byte_offset = cast(int)bo + 4;
+    return;
 }
 interpret_bytes_to_struct :: proc(val: any, v: runtime.Type_Info_Struct, data: []byte, recurrent := false) -> (err: Marshall_Error) {
 
     if v.is_raw_union do return .StructIsRawUnion;
 
     val_prev_offset: uintptr = 0;
-    byte_prev_offset: int = 0;
+    byte_prev_offset: int = size_of(u32);
     for offset, index in v.offsets {
         if v.tags[index] == "NexaTag_Marshallable" || recurrent {
             byte_offset: int
@@ -1228,11 +1236,10 @@ interpret_bytes_to_struct :: proc(val: any, v: runtime.Type_Info_Struct, data: [
                 byte_offset = _struct_field_size_deduction(
                     reflect.type_info_base(v.types[index]).variant.(runtime.Type_Info_Struct),
                     data[byte_prev_offset:],
-                    v.tags[index] == "NexaTag_Marshallable" || recurrent
                 ) or_return;
                 if byte_offset < 0 do return .InvalidType;
 
-                fmt.printf("Struct field :: [%v/Struct]:\n\tOffset: %v\n\tOffset array: %v\n", v.types[index], byte_offset, data[byte_prev_offset : byte_prev_offset + byte_offset]);
+                // fmt.printf("Struct field :: [%v/Struct]:\n\tOffset: %v\n\tOffset array: %v\n", v.types[index], byte_offset, data[byte_prev_offset : byte_prev_offset + byte_offset]);
                 interpret_bytes_to_struct(
                     any {
                         data = rawptr(uintptr(val.data) + offset),
@@ -1246,11 +1253,11 @@ interpret_bytes_to_struct :: proc(val: any, v: runtime.Type_Info_Struct, data: [
                 // determine the byte offset of the 'data' param
                 byte_offset = marshall_deserialized_size(
                     reflect.type_info_base(v.types[index]),
-                    data[byte_prev_offset:]
+                    data[byte_prev_offset:],
                 ) or_return;
                 if byte_offset < 0 do return .InvalidType;
 
-                fmt.printf("Struct field :: [%v]:\n\tOffset: %v\n\tOffset array: %v\n", v.types[index], byte_offset, data[byte_prev_offset : byte_prev_offset + byte_offset]);
+                // fmt.printf("Struct field :: [%v]:\n\tOffset: %v; PrevOffset: %v;\n\tOffset array: %v\n", v.types[index], byte_offset, byte_prev_offset, data[byte_prev_offset : byte_prev_offset + byte_offset]);
                 deserialize(
                     any {
                         data = rawptr(uintptr(val.data) + offset),
@@ -1442,14 +1449,13 @@ marshall_deserialized_size :: proc "contextless" (t: ^runtime.Type_Info, data: [
         return -1, .InvalidType;
     }
 
-    context = runtime.default_context()
-    fmt.printf("Marshall deseiralized size T[%v]: %v\n", t, marshall_deserialized_size_t(t));
+    // fmt.printf("Marshall deseiralized size T[%v]: %v\n", t, marshall_deserialized_size_t(t));
 
     // should try to grab size out of marshall_deserialized_size_t
     if size = marshall_deserialized_size_t(t); size != -1 do return size, .None;
 
     // check the remaining possible types (arrays/strings)
-    #partial switch v in t.variant {
+    #partial switch v in runtime.type_info_base(t).variant {
         case runtime.Type_Info_String:
             return _string_size(data[:4]);
         case runtime.Type_Info_Slice:
